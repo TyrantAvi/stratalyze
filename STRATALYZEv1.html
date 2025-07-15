@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STRATALYZE // Layered Protein Viewer v1.0</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.0.4/3Dmol-min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
+
+    <style>
+        /* --- Global Hacker Theme --- */
+        :root {
+            --hacker-bg: #0a0f0a; --hacker-fg: #00ff41; --hacker-fg-dim: #008f25;
+            --hacker-border: #00ff41; --hacker-font: 'Courier New', Courier, monospace;
+            --hacker-yellow: #ffff00; --hacker-orange: #ffae42; --hacker-red: #ff4500;
+            --risk-benign-color: var(--hacker-fg);
+            --risk-uncertain-color: var(--hacker-yellow);
+            --risk-pathogenic-color: var(--hacker-orange);
+            --bar-low-color: #008f25;
+            --bar-medium-color: var(--hacker-yellow);
+            --bar-high-color: var(--hacker-orange);
+            --bar-very-high-color: var(--hacker-red);
+        }
+        html, body { margin: 0; padding: 0; height: 100%; background-color: var(--hacker-bg); color: var(--hacker-fg); font-family: var(--hacker-font); font-size: 16px; overflow: hidden; }
+        .hacker-container { display: flex; flex-direction: column; height: 100vh; padding: 15px; box-sizing: border-box; border: 1px solid var(--hacker-fg-dim); box-shadow: 0 0 15px rgba(0, 255, 65, 0.3) inset; }
+        header { text-align: center; margin-bottom: 10px; text-shadow: 0 0 5px var(--hacker-fg); animation: flicker 2s infinite alternate; border-bottom: 1px dashed var(--hacker-fg-dim); padding-bottom: 10px; }
+        header h1 { margin: 0; font-size: 1.8em; letter-spacing: 2px; }
+        .controls { margin-bottom: 10px; display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-end; }
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        .control-group-horizontal { display: flex; align-items: center; gap: 10px; }
+        .file-input-wrapper { position: relative; overflow: hidden; display: inline-block; border: 1px solid var(--hacker-fg); padding: 8px 15px; cursor: pointer; background-color: rgba(0, 255, 65, 0.05); transition: background-color 0.3s ease, box-shadow 0.3s ease; height: fit-content; }
+        .file-input-wrapper:hover { background-color: rgba(0, 255, 65, 0.15); box-shadow: 0 0 8px var(--hacker-fg); }
+        .file-input-wrapper input[type=file] { position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+        .file-input-wrapper label { cursor: pointer; text-transform: uppercase; letter-spacing: 1px; }
+        .file-input-wrapper label::before { content: '[*] '; }
+        .current-file { font-size: 0.9em; color: var(--hacker-fg-dim); margin-top: 5px; }
+        #mutation-input { background-color: rgba(0, 255, 65, 0.05); border: 1px solid var(--hacker-fg-dim); color: var(--hacker-fg); font-family: var(--hacker-font); padding: 8px 10px; outline: none; width: 250px; }
+        #mutation-input::placeholder { color: var(--hacker-fg-dim); opacity: 0.7; }
+        #mutation-input:focus { border-color: var(--hacker-fg); box-shadow: 0 0 5px rgba(0, 255, 65, 0.5); }
+        label[for="mutation-input"] { font-size: 0.9em; text-transform: uppercase; color: var(--hacker-fg-dim); }
+        .hacker-button { background-color: rgba(0, 255, 65, 0.05); border: 1px solid var(--hacker-fg); color: var(--hacker-fg); font-family: var(--hacker-font); padding: 8px 15px; cursor: pointer; text-transform: uppercase; transition: background-color 0.3s ease, box-shadow 0.3s ease; height: fit-content; }
+        .hacker-button:hover { background-color: rgba(0, 255, 65, 0.15); box-shadow: 0 0 8px var(--hacker-fg); }
+        .hacker-button:active { background-color: rgba(0, 255, 65, 0.25); }
+        .hacker-button:disabled { cursor: not-allowed; opacity: 0.5; background-color: rgba(100,100,100,0.1); border-color: var(--hacker-fg-dim); }
+        #mutation-status, #bindingsite-status { font-size: 0.9em; color: var(--hacker-fg-dim); margin-left: 10px; align-self: center; }
+        #risk-assessment-area { align-items: center; padding: 5px 0; }
+        #risk-assessment-area label { color: var(--hacker-fg-dim); text-transform: uppercase; font-size: 0.9em; margin-right: 5px; }
+        #pathogenicity-risk-indicator { display: inline-block; width: 12px; height: 12px; border: 1px solid var(--hacker-fg-dim); background-color: var(--hacker-fg-dim); margin-right: 8px; vertical-align: middle; transition: background-color 0.3s ease; }
+        #pathogenicity-risk-text { font-weight: bold; font-size: 0.9em; vertical-align: middle; transition: color 0.3s ease; }
+
+        .main-content-viewers { display: flex; flex-direction: row; flex-grow: 1; min-height: 0; gap: 10px; margin-bottom: 10px; }
+        .viewer-panel { flex: 1; display: flex; flex-direction: column; border: 1px dashed var(--hacker-fg-dim); background-color: #050805; min-height: 180px; }
+        .viewer-panel h4 { margin: 5px 10px; font-size: 1em; color: var(--hacker-fg-dim); text-align: center; border-bottom: 1px solid var(--hacker-fg-dim); padding-bottom: 5px; }
+        .viewer-instance { flex-grow: 1; position: relative; }
+
+        .analysis-hub { display: flex; flex-direction: row; gap: 10px; margin-bottom: 10px; height: 200px; }
+        #sequence-display-area { flex: 0 0 45%; border: 1px dashed var(--hacker-fg-dim); padding: 10px; overflow-y: auto; background-color: #030503; color: var(--hacker-fg); font-family: var(--hacker-font); font-size: 0.9em; white-space: pre-wrap; word-break: break-all; }
+        #sequence-display-area h3 { margin: 0 0 8px 0; font-size: 1.1em; color: var(--hacker-fg-dim); text-transform: uppercase; border-bottom: 1px solid var(--hacker-fg-dim); padding-bottom: 4px; }
+        #sequence-display-area pre { margin: 0; font-family: inherit; font-size: inherit; line-height: 1.4; }
+
+        .tabbed-analysis-area { flex: 1; display: flex; flex-direction: column; border: 1px dashed var(--hacker-fg-dim); background-color: #030503; }
+        .tab-buttons { display: flex; border-bottom: 1px solid var(--hacker-fg-dim); }
+        .tab-button { padding: 8px 12px; cursor: pointer; font-size: 0.85em; text-transform: uppercase; border-right: 1px solid var(--hacker-fg-dim); background-color: transparent; color: var(--hacker-fg-dim); }
+        .tab-button:last-child { border-right: none; }
+        .tab-button.active { background-color: rgba(0, 255, 65, 0.1); color: var(--hacker-fg); border-bottom: 1px solid var(--hacker-fg); font-weight: bold; }
+        .tab-button:hover:not(.active) { background-color: rgba(0, 255, 65, 0.05); }
+        .tab-content { display: none; flex-grow: 1; overflow-y: auto; padding: 10px; }
+        .tab-content.active { display: block; }
+
+        #analysis-accordion-container { display: flex; flex-direction: column; gap: 5px; }
+        .accordion-item { border: 1px solid var(--hacker-fg-dim); background-color: #020402; }
+        .accordion-header { padding: 5px 10px; cursor: pointer; font-size: 0.85em; color: var(--hacker-fg-dim); text-transform: uppercase; border-bottom: 1px solid var(--hacker-fg-dim); display: flex; justify-content: space-between; align-items: center; }
+        .accordion-header:hover { background-color: rgba(0, 255, 65, 0.1); }
+        .accordion-content { display: none; padding: 8px; font-size: 0.8em; color: var(--hacker-fg); max-height: 80px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.3; }
+        .accordion-content pre { margin: 0; font-family: inherit; font-size: inherit; }
+        .toggle-icon { font-weight: bold; }
+
+        #summary-chart-content h4 { font-size: 1em; color: var(--hacker-fg-dim); margin: 0 0 10px 0; text-transform: uppercase; border-bottom: 1px solid var(--hacker-fg-dim); padding-bottom: 5px;}
+        #summary-chart-content p { font-size: 0.9em; margin: 0 0 8px 0; line-height: 1.3; }
+        #summary-chart-content .score-bar-group { margin-bottom: 10px; }
+        .score-bar-container { margin-bottom: 5px; }
+        .score-bar-label { font-size: 0.8em; color: var(--hacker-fg-dim); margin-bottom: 2px; display: inline-block; width: 180px; }
+        .score-bar-track { display: inline-block; width: calc(100% - 190px); height: 14px; background-color: #050805; border: 1px solid var(--hacker-fg-dim); position: relative; vertical-align: middle;}
+        .score-bar-fill { height: 100%; background-color: var(--hacker-fg); text-align: right; padding-right: 5px; box-sizing: border-box; color: var(--hacker-bg); font-size: 0.75em; line-height: 14px; font-weight: bold; white-space: nowrap; overflow: hidden;}
+        .summary-aa-properties { margin-bottom: 10px; font-size: 0.8em;}
+        .summary-aa-properties table { width: 100%; border-collapse: collapse; }
+        .summary-aa-properties th, .summary-aa-properties td { border: 1px solid var(--hacker-fg-dim); padding: 4px; text-align: left; }
+        .summary-aa-properties th { background-color: rgba(0,255,65,0.05); color: var(--hacker-fg-dim); }
+        .summary-insights-list { list-style-type: square; padding-left: 20px; margin: 0; font-size: 0.8em; }
+        .summary-insights-list li { margin-bottom: 3px; }
+
+        #status-log { height: 40px; overflow-y: auto; border: 1px solid var(--hacker-fg-dim); background-color: #030503; padding: 10px; font-size: 0.8em; white-space: pre-wrap; line-height: 1.3; }
+        #sequence-display-area::-webkit-scrollbar, .tab-content::-webkit-scrollbar, .accordion-content::-webkit-scrollbar,
+        #status-log::-webkit-scrollbar, #instructions-modal-content::-webkit-scrollbar,
+        #tos-agreement-modal-text-content::-webkit-scrollbar, #view-tos-modal-content::-webkit-scrollbar { width: 7px; }
+        #sequence-display-area::-webkit-scrollbar-track, .tab-content::-webkit-scrollbar-track, .accordion-content::-webkit-scrollbar-track,
+        #status-log::-webkit-scrollbar-track, #instructions-modal-content::-webkit-scrollbar-track,
+        #tos-agreement-modal-text-content::-webkit-scrollbar-track, #view-tos-modal-content::-webkit-scrollbar-track { background: var(--hacker-bg); border-left: 1px solid var(--hacker-fg-dim); }
+        #sequence-display-area::-webkit-scrollbar-thumb, .tab-content::-webkit-scrollbar-thumb, .accordion-content::-webkit-scrollbar-thumb,
+        #status-log::-webkit-scrollbar-thumb, #instructions-modal-content::-webkit-scrollbar-thumb,
+        #tos-agreement-modal-text-content::-webkit-scrollbar-thumb, #view-tos-modal-content::-webkit-scrollbar-thumb { background: var(--hacker-fg-dim); }
+        #sequence-display-area::-webkit-scrollbar-thumb:hover, .tab-content::-webkit-scrollbar-thumb:hover, .accordion-content::-webkit-scrollbar-thumb:hover,
+        #status-log::-webkit-scrollbar-thumb:hover, #instructions-modal-content::-webkit-scrollbar-thumb:hover,
+        #tos-agreement-modal-text-content::-webkit-scrollbar-thumb:hover, #view-tos-modal-content::-webkit-scrollbar-thumb:hover { background: var(--hacker-fg); }
+
+        @keyframes flicker { 0%, 100% { opacity: 1; text-shadow: 0 0 5px var(--hacker-fg); } 50% { opacity: 0.8; text-shadow: 0 0 10px var(--hacker-fg); } }
+        .cursor::after { content: '_'; opacity: 1; animation: blink 1s infinite; margin-left: 2px; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+        /* --- Modal Styles (Generic) --- */
+        .modal-overlay { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(10, 15, 10, 0.8); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+        .modal-content-wrapper { position: fixed; z-index: 1001; left: 50%; top: 50%; transform: translate(-50%, -50%); background-color: #030503; color: var(--hacker-fg); border: 2px solid var(--hacker-fg); box-shadow: 0 0 25px var(--hacker-fg); padding: 25px; width: 80%; max-width: 700px; max-height: 85vh; display: flex; flex-direction: column; }
+        #instructions-modal-content, #tos-agreement-modal-text-content, #view-tos-modal-content { overflow-y: auto; flex-grow: 1; font-size: 0.9em; line-height: 1.5; margin-bottom:15px; }
+        .modal-content-wrapper h2 { color: var(--hacker-fg); text-shadow: 0 0 5px var(--hacker-fg); margin-top: 0; border-bottom: 1px dashed var(--hacker-fg-dim); padding-bottom: 10px; }
+        .modal-content-wrapper h3 { color: var(--hacker-fg-dim); margin-top: 15px; margin-bottom: 5px; }
+        .modal-content-wrapper p, .modal-content-wrapper ul { margin-bottom: 10px; }
+        .modal-content-wrapper ul { list-style-type: square; padding-left: 25px; }
+        .modal-content-wrapper code { background-color: rgba(0,255,65,0.1); padding: 2px 5px; border: 1px solid var(--hacker-fg-dim); font-weight: bold; }
+        .modal-content-wrapper strong { color: var(--hacker-yellow); font-weight: normal ; } /* Highlight strong text */
+        .modal-close-btn, .modal-action-btn { align-self: flex-end; margin-top: 15px; padding: 8px 15px; background-color: rgba(0, 255, 65, 0.1); border: 1px solid var(--hacker-fg); color: var(--hacker-fg); cursor: pointer; text-transform: uppercase; }
+        .modal-close-btn:hover, .modal-action-btn:hover:not(:disabled) { background-color: rgba(0, 255, 65, 0.2); box-shadow: 0 0 8px var(--hacker-fg); }
+        .modal-action-btn:disabled { cursor: not-allowed; opacity: 0.5; background-color: rgba(100,100,100,0.1); border-color: var(--hacker-fg-dim); }
+
+        /* ToS Agreement Modal specific styles */
+        .tos-controls { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+        .tos-checkbox-label { font-size: 0.85em; display: flex; align-items: center; }
+        #tos-agree-checkbox { margin-right: 8px; accent-color: var(--hacker-fg); cursor: pointer; }
+        #tos-agree-checkbox:disabled { cursor: not-allowed; opacity: 0.6; }
+    </style>
+</head>
+<body>
+    <div class="hacker-container">
+        <header> <h1>STRATALYZE // Layered Protein Viewer v1.0</h1> </header>
+        <div class="controls">
+            <div class="control-group"> <div class="file-input-wrapper"> <label for="structure-upload">Load Structure File</label> <input type="file" id="structure-upload" accept=".pdb,.gz,.cif,.mmcif"> </div> <span class="current-file">No file loaded.</span> </div>
+            <div class="control-group-horizontal"> <div class="control-group"> <label for="mutation-input">Mutate (Chain:SeqIdx:NewAA):</label> <input type="text" id="mutation-input" placeholder="e.g., A:10:G"> </div> <button id="apply-mutation-btn" class="hacker-button">Apply Mutation</button> <span id="mutation-status">No mutation.</span> </div>
+            <div class="control-group-horizontal" id="risk-assessment-area"> <label>Risk Level:</label> <span id="pathogenicity-risk-indicator"></span> <span id="pathogenicity-risk-text">N/A</span> </div>
+            <div class="control-group-horizontal"> <button id="toggle-bindingsites-btn" class="hacker-button">Toggle Binding Sites</button> <span id="bindingsite-status">Sites hidden.</span> </div>
+            <div class="control-group-horizontal"> <button id="generate-pdf-btn" class="hacker-button" disabled>Generate Report (PDF)</button> </div>
+            <div class="control-group-horizontal"> <button id="instructions-btn" class="hacker-button">Instructions</button> </div>
+            <div class="control-group-horizontal"> <button id="view-tos-btn" class="hacker-button">View Terms</button> </div>
+        </div>
+        <div class="main-content-viewers"> <div class="viewer-panel" id="viewer-wt-panel"> <h4>Wild-Type Structure</h4> <div id="viewer-wt" class="viewer-instance"></div> </div> <div class="viewer-panel" id="viewer-mutant-panel"> <h4>Mutant Indication</h4> <div id="viewer-mutant" class="viewer-instance"></div> </div> </div>
+
+        <div class="analysis-hub">
+             <div id="sequence-display-area"> <h3>Extracted Sequence(s)</h3> <pre id="sequence-output">No sequence.</pre> </div>
+            <div class="tabbed-analysis-area">
+                <div class="tab-buttons">
+                    <button class="tab-button active" data-tab="detailed-analysis-tab">Detailed Analysis</button>
+                    <button class="tab-button" data-tab="summary-chart-tab">Summary Chart</button>
+                </div>
+                <div id="detailed-analysis-tab" class="tab-content active">
+                    <div id="analysis-accordion-container">
+                        <div class="accordion-item"> <h3 class="accordion-header" data-target="#steric-output-content">Steric Hindrance <span class="toggle-icon">+</span></h3> <div class="accordion-content" id="steric-output-content"> <pre id="steric-output">N/A</pre> </div> </div>
+                        <div class="accordion-item"> <h3 class="accordion-header" data-target="#interaction-output-content">Interaction Impact <span class="toggle-icon">+</span></h3> <div class="accordion-content" id="interaction-output-content"> <pre id="interaction-output">N/A</pre> </div> </div>
+                        <div class="accordion-item"> <h3 class="accordion-header" data-target="#bindingsite-proximity-content">Binding Site Proximity <span class="toggle-icon">+</span></h3> <div class="accordion-content" id="bindingsite-proximity-content"> <pre id="bindingsite-proximity-output">N/A</pre> </div> </div>
+                        <div class="accordion-item"> <h3 class="accordion-header" data-target="#binding-disruption-content">Binding Disruption Prediction <span class="toggle-icon">+</span></h3> <div class="accordion-content" id="binding-disruption-content"> <pre id="binding-disruption-output">N/A</pre> </div> </div>
+                        <div class="accordion-item"> <h3 class="accordion-header" data-target="#impact-score-content">Overall Impact Score <span class="toggle-icon">+</span></h3> <div class="accordion-content" id="impact-score-content"> <pre id="impact-score-output">N/A</pre> </div> </div>
+                    </div>
+                </div>
+                <div id="summary-chart-tab" class="tab-content">
+                    <div id="summary-chart-content">
+                        <h4>Mutation Summary & Visuals</h4>
+                        <p id="summary-mutation-overview">N/A</p>
+                        <p>Risk Level: <strong id="summary-risk-level" style="color: var(--hacker-fg-dim);">N/A</strong></p>
+                        <div class="score-bar-group">
+                            <div class="score-bar-container"> <span class="score-bar-label">Overall Structural Impact:</span> <div class="score-bar-track"><div id="summary-impact-score-bar" class="score-bar-fill" style="width: 0%;">0</div></div> </div>
+                            <div class="score-bar-container"> <span class="score-bar-label">Binding Disruption Score:</span> <div class="score-bar-track"><div id="summary-disruption-score-bar" class="score-bar-fill" style="width: 0%;">0</div></div> </div>
+                        </div>
+                        <div class="summary-aa-properties">
+                            <h4>Amino Acid Property Comparison</h4>
+                            <table>
+                                <thead><tr><th>Property</th><th>Wild-Type (WT)</th><th>Mutant (MUT)</th></tr></thead>
+                                <tbody id="summary-aa-properties-table-body">
+                                    <tr><td>Residue</td><td data-prop="res-wt">N/A</td><td data-prop="res-mut">N/A</td></tr>
+                                    <tr><td>Size Category</td><td data-prop="size-wt">N/A</td><td data-prop="size-mut">N/A</td></tr>
+                                    <tr><td>Charge</td><td data-prop="charge-wt">N/A</td><td data-prop="charge-mut">N/A</td></tr>
+                                    <tr><td>Hydrophobicity</td><td data-prop="hydro-wt">N/A</td><td data-prop="hydro-mut">N/A</td></tr>
+                                    <tr><td>H-Bond Potential</td><td data-prop="hbond-wt">N/A</td><td data-prop="hbond-mut">N/A</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <h4>Key Insights</h4>
+                        <ul id="summary-insights-list" class="summary-insights-list"> <li>N/A</li> </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="status-log"> <span class="cursor">System Online. Awaiting Terms of Use agreement.</span> </div>
+
+        <!-- Instructions Modal HTML -->
+        <div id="instructions-modal-overlay" class="modal-overlay">
+            <div class="modal-content-wrapper">
+                <div id="instructions-modal-content">
+                    <h2>STRATALYZE // Structure Portal Instructions</h2>
+                    <p>Welcome to the STRATALYZE Structure Portal! This tool allows you to visualize protein/nucleic acid structures, apply in-silico mutations, and predict their potential impact.</p>
+                    <h3>1. Loading a Structure</h3>
+                    <ul><li>Click the <strong>[LOAD STRUCTURE FILE]</strong> button.</li><li>Select a PDB (.pdb), mmCIF (.cif, .mmcif) file, or their gzipped versions (.pdb.gz, .cif.gz).</li><li>The structure will be displayed in two viewers: "Wild-Type" and "Mutant Indication".</li><li>Extracted sequences will appear in the "Extracted Sequence(s)" panel.</li></ul>
+                    <h3>2. Applying a Mutation</h3>
+                    <ul><li>In the "Mutate (Chain:SeqIdx:NewAA)" input field, enter the mutation in the format: <code>ChainID:SequenceIndex:NewAminoAcid</code>.<ul><li>Example: <code>A:102:G</code> (Mutate residue at index 102 in Chain A to Glycine).</li><li>ChainID is case-sensitive as per your PDB/CIF file.</li><li>SequenceIndex is 1-based.</li><li>NewAminoAcid is the 1-letter code (e.g., A, G, C, V, etc.).</li></ul></li><li>Click the <strong>[APPLY MUTATION]</strong> button.</li><li>The "Mutant Indication" viewer will highlight the mutated residue in magenta.</li><li>All analysis panels will update based on the mutation.</li></ul>
+                    <h3>3. Understanding the Viewers</h3>
+                    <ul><li><strong>Wild-Type Structure:</strong> Shows the original, unmutated structure. Potential H-bonds lost due to the mutation (sidechain only) will be indicated by yellow dashed cylinders.</li><li><strong>Mutant Indication:</strong> Shows the same structure, but the Cα atom of the mutated residue is highlighted in magenta, and a label indicates the new amino acid.</li><li>Both viewers are linked: rotating/zooming one affects the other.</li><li>Ligands (HETATMs, excluding water) are shown as sticks. Water molecules are grey spheres.</li></ul>
+                    <h3>4. Analysis Hub (Tabs & Panels)</h3>
+                    <p>The area below the 3D viewers contains detailed analysis, split into tabs:</p><h4>Detailed Analysis Tab:</h4><p>This tab contains several expandable accordion panels:</p><ul><li><strong>Steric Hindrance:</strong> Predicts potential steric clashes based on proximity to the Cα of the mutated residue and the bulkiness of the new amino acid.</li><li><strong>Interaction Impact:</strong> Identifies potential sidechain hydrogen bonds of the original residue that might be lost due to the mutation.</li><li><strong>Binding Site Proximity:</strong> Determines if the mutation occurs within or near a potential ligand binding site (identified by proximity to HETATMs).</li><li><strong>Binding Disruption Prediction:</strong> Scores the likelihood of the mutation disrupting ligand binding based on proximity, size change, H-bond loss, and steric factors.</li><li><strong>Overall Impact Score:</strong> A heuristic score (0-100) combining size change, steric hindrance, and lost H-bonds to give a general idea of the mutation's structural impact.</li></ul>
+                    <h4>Summary Chart Tab:</h4>
+                    <ul><li><strong>Mutation Overview & Risk Level:</strong> Displays the current mutation and its predicted pathogenicity risk (also shown in the top controls).</li><li><strong>Score Visualizations:</strong> Bar charts for Overall Impact and Binding Disruption scores.</li><li><strong>Amino Acid Property Comparison:</strong> A table comparing size, charge, hydrophobicity, and H-bond potential of the wild-type vs. mutant residue.</li><li><strong>Key Insights:</strong> A bulleted list summarizing the most significant findings from the analyses.</li></ul><p>Click on an accordion header or tab button to expand/view its content.</p>
+                    <h3>5. Controls & Indicators</h3>
+                    <ul><li><strong>Risk Level Display:</strong> (Top controls) Shows a color-coded indicator and text for the predicted pathogenicity: <span style="color:var(--risk-benign-color);">Likely Benign</span>, <span style="color:var(--risk-uncertain-color);">Uncertain</span>, or <span style="color:var(--risk-pathogenic-color);">Likely Pathogenic</span>.</li><li><strong>Toggle Binding Sites:</strong> Highlights residues potentially involved in ligand binding in blue in both viewers. This helps assess if a mutation is near an active site.</li><li><strong>Generate Report (PDF):</strong> (Enabled after a mutation is applied) Creates a downloadable PDF summary of the current analysis.</li><li><strong>View Terms:</strong> Opens a panel to review the Terms of Service at any time.</li></ul>
+                    <h3>6. Status Log</h3><p>The bottom-most panel displays a running log of system actions, updates, and any errors encountered. Keep an eye on this for feedback.</p>
+                    <p><em>Happy Hacking! // STRATAMANE corp</em></p>
+                </div>
+                <button id="instructions-modal-close-btn" class="modal-close-btn">Close [X]</button>
+            </div>
+        </div>
+
+        <!-- Terms of Use Agreement Modal HTML (Mandatory) -->
+        <div id="tos-agreement-modal-overlay" class="modal-overlay">
+            <div class="modal-content-wrapper">
+                <h2>Terms of Use - STRATALYZE Structure Portal</h2>
+                <div id="tos-agreement-modal-text-content">
+                    <p><strong>Important Notice:</strong> The predictions and analyses provided by the STRATALYZE Structure Portal are for <strong>research, educational, and informational purposes only</strong>. They are based on heuristic algorithms and publicly available data and should <strong>NOT</strong> be considered definitive, diagnostic, or a substitute for experimental validation or professional medical advice. Clinical decisions should <strong>NEVER</strong> be based solely on the output of this tool.</p>
+                    <hr style="border-color: var(--hacker-fg-dim); margin: 10px 0;">
+                    <p><strong>Effective Date:</strong> May 14, 2025 - ILLIMITABLE FUTURE</p>
+                    <p>Welcome to the STRATLYZE Structure Portal. This Service is provided by STRATAMANE corp for research, educational, and informational purposes only. By accessing or using the Service, you agree to be bound by these Terms of Use. If you disagree with any part of the terms, then you may not access the Service.</p>
+
+                    <h3>1. Acceptance of Terms</h3>
+                    <p>Your access to and use of the Service is strictly conditioned upon your acceptance of and compliance with these Terms. These Terms apply to all visitors, users, and others who wish to access or use the Service. You must read this document carefully.</p>
+
+                    <h3>2. Description of Service & Limitations</h3>
+                    <p>The STRATALYZE Structure Portal provides computational tools for visualizing molecular structures, performing in-silico mutations, and generating predictive analyses of their potential structural and functional impacts. <strong>Users must understand that these are predictions and estimations, not experimental results or established facts.</strong></p>
+                    <ul>
+                        <li>The Service is intended for use by individuals with appropriate scientific and technical understanding.</li>
+                        <li>Interpretations of the results require careful consideration of the underlying methodologies and their inherent limitations.</li>
+                        <li>The Service does not provide medical advice, diagnosis, or treatment recommendations.</li>
+                    </ul>
+                    <h3>3. No Warranty; Limitation of Liability</h3>
+                    <p>THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT ANY WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, ACCURACY, COMPLETENESS, OR RELIABILITY OF THE INFORMATION OR ANALYSES GENERATED. STRATAMANE corp (HEREINAFTER "FOUNDER”) DOES NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, OR SECURE, OR THAT ANY PREDICTIONS WILL BE ACCURATE OR VALIDATED.</p>
+                    <p>IN NO EVENT SHALL THE OWNER OR ITS AFFILIATES BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING WITHOUT LIMITATION, LOSS OF PROFITS, DATA, USE, GOODWILL, OR OTHER INTANGIBLE LOSSES, RESULTING FROM (I) YOUR ACCESS TO OR USE OF OR INABILITY TO ACCESS OR USE THE SERVICE; (II) ANY CONDUCT OR CONTENT OF ANY THIRD PARTY ON THE SERVICE; (III) ANY CONTENT OR ANALYSIS OBTAINED FROM THE SERVICE; (IV) UNAUTHORIZED ACCESS, USE OR ALTERATION OF YOUR TRANSMISSIONS OR CONTENT; OR (V) ANY RELIANCE PLACED ON THE INFORMATION OR PREDICTIONS GENERATED BY THE SERVICE, WHETHER BASED ON WARRANTY, CONTRACT, TORT (INCLUDING NEGLIGENCE) OR ANY OTHER LEGAL THEORY, WHETHER OR NOT WE HAVE BEEN INFORMED OF THE POSSIBILITY OF SUCH DAMAGE, AND EVEN IF A REMEDY SET FORTH HEREIN IS FOUND TO HAVE FAILED OF ITS ESSENTIAL PURPOSE.</p>
+                    <p><strong>You explicitly acknowledge and agree that you use the Service and rely on its outputs entirely at your own risk.</strong></p>
+
+                    <h3>4. User Conduct and Responsibilities</h3>
+                    <p>You agree not to use the Service:</p>
+                    <ul>
+                        <li>For any purpose that is unlawful or prohibited by these Terms.</li>
+                        <li>To make clinical or diagnostic decisions.</li>
+                        <li>In any manner that could damage, disable, overburden, or impair the Service or interfere with any other party's use and enjoyment of the Service.</li>
+                        <li>To attempt to gain unauthorized access to the Service, other accounts, computer systems, or networks connected to the Service, through hacking, password mining, or any other means.</li>
+                        <li>To decompile, reverse engineer, disassemble, or otherwise attempt to derive the source code for any underlying software or other intellectual property used to provide the Service, except to the extent that such activity is expressly permitted by applicable law notwithstanding this limitation.</li>
+                        <li>To systematically scrape, extract, or harvest data from the Service, including its analytical outputs or visual representations, for unauthorized commercial use or to create a competing service.</li>
+                    </ul>
+                    <p>You are responsible for the legality and appropriateness of any data (e.g., PDB/CIF files) you upload or input into the Service. Do not upload sensitive personal data or data for which you do not have the necessary rights or permissions.</p>
+
+                    <h3>5. Intellectual Property Rights</h3>
+                    <p>The Service, including its "STRATALYZE" name, logo, overall design, user interface, analytical methodologies, textual content, and source code (excluding third-party libraries listed below and user-uploaded data) are the exclusive intellectual property of the Owner/Founder and are protected by copyright, trademark, and other intellectual property laws.</p>
+                    <p><strong>Strict Prohibition on Unauthorized Use:</strong> You may NOT copy, download, reproduce, modify, translate, transform, publish, transmit, sell, sublicense, edit, transfer/assign to third parties, create derivative works from, distribute, perform, display, or in any way exploit any of the STRATALYZE Structure Portal's unique source code, content (as described above), or overall design, in whole or in part, without the express prior written permission of the STRATALYZE Team. This prohibition is absolute and includes, but is not limited to, decompiling, reverse engineering, or disassembling any part of the Service. Any unauthorized use of the Service's intellectual property is a violation of these Terms and applicable laws, and may result in severe civil and criminal penalties. STRATAMANE corp will aggressively enforce its intellectual property rights to the fullest extent of the law.</p>
+                    <p>The underlying third-party libraries used (e.g., 3Dmol.js, pako.js, jsPDF, jQuery) are subject to their own respective licenses, which are hereby acknowledged. Your use of these libraries through the Service is governed by those licenses.</p>
+
+                    <h3>6. User-Provided Content (Structural Data)</h3>
+                    <p>By uploading structural data files (e.g., PDB, mmCIF) to the Service, you represent and warrant that you have the right to do so and that such data does not infringe upon any third-party rights. The Service processes this data locally within your browser for visualization and analysis. We do not store, collect, or transmit your uploaded structural data to our servers beyond what is necessary for the immediate processing session within your browser.</p>
+
+                    <h3>7. Changes to Terms</h3>
+                    <p>We reserve the right, at our sole discretion, to modify or replace these Terms at any time. If a revision is material, we will endeavor to provide reasonable notice prior to any new terms taking effect. What constitutes a material change will be determined at our sole discretion. By continuing to access or use our Service after any revisions become effective, you agree to be bound by the revised terms.</p>
+
+                    <h3>8. Governing Law & Jurisdiction</h3>
+                    <p>These Terms shall be governed and construed in accordance with the laws of the State of California, United States, without regard to its conflict of law provisions. Any legal suit, action, or proceeding arising out of, or related to, these Terms or the Service shall be instituted exclusively in the federal or state courts located in Los Angeles County, California.</p>
+
+                    <h3>9. Disclaimer for External Links</h3>
+                    <p>The Service may contain links to third-party web sites or services that are not owned or controlled by STRATAMANE corp. STRATAMANE corp has no control over, and assumes no responsibility for, the content, privacy policies, or practices of any third-party web sites or services. You further acknowledge and agree that the STRATAMANE corp shall not be responsible or liable, directly or indirectly, for any damage or loss caused or alleged to be caused by or in connection with the use of or reliance on any such content, goods or services available on or through any such web sites or services.</p>
+
+                    <h3>10. Contact Information</h3>
+                    <p>If you have any questions about these Terms, please contact us at: <strong>stratamane@gmail.com</strong> (Example Email - Please replace)</p>
+                    <hr style="border-color: var(--hacker-fg-dim); margin: 10px 0;"/>
+                    <p><em>By checking the box below and clicking "Agree & Proceed", you acknowledge that you have read, understood, and agree to be bound by these Terms of Use for the STRATALYZE Structure Portal.</em></p>
+                </div>
+                <div class="tos-controls">
+                    <label class="tos-checkbox-label">
+                        <input type="checkbox" id="tos-agree-checkbox" disabled> I have read, understood, and agree to the Terms of Use.
+                    </label>
+                    <button id="tos-agree-btn" class="modal-action-btn" disabled>Agree & Proceed</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- View Terms of Service Modal HTML (Informational) -->
+        <div id="view-tos-modal-overlay" class="modal-overlay">
+            <div class="modal-content-wrapper">
+                 <div id="view-tos-modal-content">
+                    <!-- Content here should be IDENTICAL to #tos-agreement-modal-text-content -->
+                    <p><strong>Important Notice:</strong> The predictions and analyses provided by the STRATALYZE Structure Portal are for <strong>research, educational, and informational purposes only</strong>. They are based on heuristic algorithms and publicly available data and should <strong>NOT</strong> be considered definitive, diagnostic, or a substitute for experimental validation or professional medical advice. Clinical decisions should <strong>NEVER</strong> be based solely on the output of this tool.</p>
+                    <hr style="border-color: var(--hacker-fg-dim); margin: 10px 0;">
+                    <p><strong>Effective Date:</strong> May 14, 2025 - ILLIMITABLE FUTURE</p>
+                    <p>Welcome to the STRATALYZE Structure Portal ("Service", "Portal"). This Service is provided by STRATAMANE corp for research, educational, and informational purposes only. By accessing or using the Service, you agree to be bound by these Terms of Use. If you disagree with any part of the terms, then you may not access the Service.</p>
+                    <h3>1. Acceptance of Terms</h3><p>Your access to and use of the Service is strictly conditioned upon your acceptance of and compliance with these Terms. These Terms apply to all visitors, users, and others who wish to access or use the Service. You must read this document carefully.</p>
+                    <h3>2. Description of Service & Limitations</h3><p>The STRATALYZE Structure Portal provides computational tools for visualizing molecular structures, performing in-silico mutations, and generating predictive analyses of their potential structural and functional impacts. <strong>Users must understand that these are predictions and estimations, not experimental results or established facts.</strong></p><ul><li>The Service is intended for use by individuals with appropriate scientific and technical understanding.</li><li>Interpretations of the results require careful consideration of the underlying methodologies and their inherent limitations.</li><li>The Service does not provide medical advice, diagnosis, or treatment recommendations.</li></ul>
+                    <h3>3. No Warranty; Limitation of Liability</h3><p>THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT ANY WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, ACCURACY, COMPLETENESS, OR RELIABILITY OF THE INFORMATION OR ANALYSES GENERATED. STRATAMANE corp (HEREINAFTER "FOUNDER") DOES NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, OR SECURE, OR THAT ANY PREDICTIONS WILL BE ACCURATE OR VALIDATED.</p><p>IN NO EVENT SHALL THE OWNER OR ITS AFFILIATES BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING WITHOUT LIMITATION, LOSS OF PROFITS, DATA, USE, GOODWILL, OR OTHER INTANGIBLE LOSSES, RESULTING FROM (I) YOUR ACCESS TO OR USE OF OR INABILITY TO ACCESS OR USE THE SERVICE; (II) ANY CONDUCT OR CONTENT OF ANY THIRD PARTY ON THE SERVICE; (III) ANY CONTENT OR ANALYSIS OBTAINED FROM THE SERVICE; (IV) UNAUTHORIZED ACCESS, USE OR ALTERATION OF YOUR TRANSMISSIONS OR CONTENT; OR (V) ANY RELIANCE PLACED ON THE INFORMATION OR PREDICTIONS GENERATED BY THE SERVICE, WHETHER BASED ON WARRANTY, CONTRACT, TORT (INCLUDING NEGLIGENCE) OR ANY OTHER LEGAL THEORY, WHETHER OR NOT WE HAVE BEEN INFORMED OF THE POSSIBILITY OF SUCH DAMAGE, AND EVEN IF A REMEDY SET FORTH HEREIN IS FOUND TO HAVE FAILED OF ITS ESSENTIAL PURPOSE.</p><p><strong>You explicitly acknowledge and agree that you use the Service and rely on its outputs entirely at your own risk.</strong></p>
+                    <h3>4. User Conduct and Responsibilities</h3><p>You agree not to use the Service:</p><ul><li>For any purpose that is unlawful or prohibited by these Terms.</li><li>To make clinical or diagnostic decisions.</li><li>In any manner that could damage, disable, overburden, or impair the Service or interfere with any other party's use and enjoyment of the Service.</li><li>To attempt to gain unauthorized access to the Service, other accounts, computer systems, or networks connected to the Service, through hacking, password mining, or any other means.</li><li>To decompile, reverse engineer, disassemble, or otherwise attempt to derive the source code for any underlying software or other intellectual property used to provide the Service, except to the extent that such activity is expressly permitted by applicable law notwithstanding this limitation.</li><li>To systematically scrape, extract, or harvest data from the Service, including its analytical outputs or visual representations, for unauthorized commercial use or to create a competing service.</li></ul><p>You are responsible for the legality and appropriateness of any data (e.g., PDB/CIF files) you upload or input into the Service. Do not upload sensitive personal data or data for which you do not have the necessary rights or permissions.</p>
+                    <h3>5. Intellectual Property Rights</h3><p>The Service, including its "STRATALYZE" name, logo, overall design, user interface, analytical methodologies, textual content, and source code (excluding third-party libraries listed below and user-uploaded data) are the exclusive intellectual property of the Owner and are protected by copyright, trademark, and other intellectual property laws.</p><p><strong>Strict Prohibition on Unauthorized Use:</strong> You may NOT copy, download, reproduce, modify, translate, transform, publish, transmit, sell, sublicense, edit, transfer/assign to third parties, create derivative works from, distribute, perform, display, or in any way exploit any of the STRATALYZE Structure Portal's unique source code, content (as described above), or overall design, in whole or in part, without the express prior written permission of STRATAMANE Corp. This prohibition is absolute and includes, but is not limited to, decompiling, reverse engineering, or disassembling any part of the Service. Any unauthorized use of the Service's intellectual property is a violation of these Terms and applicable laws, and may result in severe civil and criminal penalties. The STRATALYZE Team will aggressively enforce its intellectual property rights to the fullest extent of the law.</p><p>The underlying third-party libraries used (e.g., 3Dmol.js, pako.js, jsPDF, jQuery) are subject to their own respective licenses, which are hereby acknowledged. Your use of these libraries through the Service is governed by those licenses.</p>
+                    <h3>6. User-Provided Content (Structural Data)</h3><p>By uploading structural data files (e.g., PDB, mmCIF) to the Service, you represent and warrant that you have the right to do so and that such data does not infringe upon any third-party rights. The Service processes this data locally within your browser for visualization and analysis. We do not store, collect, or transmit your uploaded structural data to our servers beyond what is necessary for the immediate processing session within your browser.</p>
+                    <h3>7. Changes to Terms</h3><p>We reserve the right, at our sole discretion, to modify or replace these Terms at any time. If a revision is material, we will endeavor to provide reasonable notice prior to any new terms taking effect. What constitutes a material change will be determined at our sole discretion. By continuing to access or use our Service after any revisions become effective, you agree to be bound by the revised terms.</p>
+                    <h3>8. Governing Law & Jurisdiction</h3><p>These Terms shall be governed and construed in accordance with the laws of the State of California, United States, without regard to its conflict of law provisions. Any legal suit, action, or proceeding arising out of, or related to, these Terms or the Service shall be instituted exclusively in the federal or state courts located in Los Angeles County, California.</p>
+                    <h3>9. Disclaimer for External Links</h3><p>The Service may contain links to third-party web sites or services that are not owned or controlled by STRATAMANE corp. STRATAMANE corp has no control over, and assumes no responsibility for, the content, privacy policies, or practices of any third-party web sites or services. You further acknowledge and agree that STRATAMANE corp shall not be responsible or liable, directly or indirectly, for any damage or loss caused or alleged to be caused by or in connection with the use of or reliance on any such content, goods or services available on or through any such web sites or services.</p>
+                    <h3>10. Contact Information</h3><p>If you have any questions about these Terms, please contact us at: <strong>stratamane@gmail.comv</strong>
+                </div>
+                <button id="view-tos-modal-close-btn" class="modal-close-btn">Close [X]</button>
+            </div>
+        </div>
+
+    <script>
+        const { jsPDF } = window.jspdf;
+
+        // Global variables
+        let viewerWT = null, viewerMutant = null;
+        let structureData = null, structureFormat = null, extractedSequences = null;
+        let currentMutation = { residueInfo: null, newAA: null, labelObjectMutant: null, interactionShapes: [], nearbyAtomCount: 0, lostHBondsCount: 0, proximityToBindingSite: null, overallImpactScore: null, bindingDisruptionScore: null, riskLevel: null, riskColor: null, loadedFileName: "N/A" };
+        let bindingSitesHighlighted = false;
+        let bindingSiteResidueKeys = new Set();
+        let bindingSiteDisplaySelections = [];
+        let tosAgreed = false;
+
+        // DOM References
+        const generatePdfBtn = document.getElementById('generate-pdf-btn');
+        const instructionsBtn = document.getElementById('instructions-btn');
+        const instructionsModalOverlay = document.getElementById('instructions-modal-overlay');
+        const instructionsModalCloseBtn = document.getElementById('instructions-modal-close-btn');
+        const tosAgreementModalOverlay = document.getElementById('tos-agreement-modal-overlay');
+        const tosAgreementModalTextContent = document.getElementById('tos-agreement-modal-text-content');
+        const tosAgreeCheckbox = document.getElementById('tos-agree-checkbox');
+        const tosAgreeBtn = document.getElementById('tos-agree-btn');
+        const viewTosBtn = document.getElementById('view-tos-btn');
+        const viewTosModalOverlay = document.getElementById('view-tos-modal-overlay');
+        const viewTosModalCloseBtn = document.getElementById('view-tos-modal-close-btn');
+        const viewerWTContainer = $('#viewer-wt'), viewerMutantContainer = $('#viewer-mutant');
+        const fileInput = document.getElementById('structure-upload'), statusLog = document.getElementById('status-log'), currentFileSpan = document.querySelector('.current-file'), mutationInput = document.getElementById('mutation-input'), applyMutationBtn = document.getElementById('apply-mutation-btn'), mutationStatusSpan = document.getElementById('mutation-status'), sequenceOutputElement = document.getElementById('sequence-output');
+        const stericOutputElement = document.getElementById('steric-output');
+        const interactionOutputElement = document.getElementById('interaction-output');
+        const bindingSiteProximityOutputElement = document.getElementById('bindingsite-proximity-output');
+        const bindingDisruptionOutputElement = document.getElementById('binding-disruption-output');
+        const impactScoreOutputElement = document.getElementById('impact-score-output');
+        const accordionHeaders = document.querySelectorAll('.accordion-header');
+        const toggleBindingSitesBtn = document.getElementById('toggle-bindingsites-btn');
+        const bindingSiteStatusSpan = document.getElementById('bindingsite-status');
+        const pathogenicityRiskIndicatorElement = document.getElementById('pathogenicity-risk-indicator');
+        const pathogenicityRiskTextElement = document.getElementById('pathogenicity-risk-text');
+        const tabButtons = document.querySelectorAll('.tab-button');
+        const tabContents = document.querySelectorAll('.tab-content');
+        const summaryMutationOverview = document.getElementById('summary-mutation-overview');
+        const summaryRiskLevelText = document.getElementById('summary-risk-level');
+        const summaryImpactScoreBar = document.getElementById('summary-impact-score-bar');
+        const summaryDisruptionScoreBar = document.getElementById('summary-disruption-score-bar');
+        const summaryAAPropsTableBody = document.getElementById('summary-aa-properties-table-body');
+        const summaryInsightsList = document.getElementById('summary-insights-list');
+
+        // Residue Code Mappings & Helpers (No changes from v1.22)
+        const AMINO_ACID_MAP_3_TO_1 = { 'ALA':'A', 'ARG':'R', 'ASN':'N', 'ASP':'D', 'CYS':'C', 'GLN':'Q', 'GLU':'E', 'GLY':'G', 'HIS':'H', 'ILE':'I', 'LEU':'L', 'LYS':'K', 'MET':'M', 'PHE':'F', 'PRO':'P', 'SER':'S', 'THR':'T', 'TRP':'W', 'TYR':'Y', 'VAL':'V', 'SEC':'U', 'PYL':'O' }; const NUCLEIC_ACID_MAP_TO_1 = { 'DA':'A', 'DC':'C', 'DG':'G', 'DT':'T', 'A':'A', 'C':'C', 'G':'G', 'T':'T', 'RA':'A', 'RC':'C', 'RG':'G', 'RU':'U', 'U':'U', 'N':'N', 'I':'I' }; const getSequenceLetter = (code3) => { const c = code3.toUpperCase(); return AMINO_ACID_MAP_3_TO_1[c] || NUCLEIC_ACID_MAP_TO_1[c] || 'X'; }; const isValidAminoAcid1Letter = (letter) => Object.values(AMINO_ACID_MAP_3_TO_1).includes(letter.toUpperCase()); const BULKY_AMINO_ACIDS = ['F', 'W', 'Y', 'R', 'K', 'H', 'M', 'I', 'L']; const HBOND_ATOMS_BY_RES = {'ARG': {'NE':'D', 'NH1':'D', 'NH2':'D'},'ASN': {'ND2':'D', 'OD1':'A'},'ASP': {'OD1':'A', 'OD2':'A'},'CYS': {'SG':'B'},'GLN': {'NE2':'D', 'OE1':'A'},'GLU': {'OE1':'A', 'OE2':'A'},'HIS': {'ND1':'B', 'NE2':'B'},'LYS': {'NZ':'D'},'SER': {'OG':'B'},'THR': {'OG1':'B'},'TRP': {'NE1':'D'},'TYR': {'OH':'B'}}; const BACKBONE_N = 'N', BACKBONE_O = 'O'; const AMINO_ACID_MAP_1_TO_3_REV = {}; for (const key in AMINO_ACID_MAP_3_TO_1) { AMINO_ACID_MAP_1_TO_3_REV[AMINO_ACID_MAP_3_TO_1[key]] = key; }
+        const AMINO_ACID_SIZE_CATEGORY = {'G': 1,'A': 2, 'S': 2, 'C': 2, 'P': 2,'V': 3, 'T': 3, 'D': 3, 'N': 3,'L': 4, 'I': 4, 'M': 4, 'E': 4, 'Q': 4, 'H': 4,'F': 5, 'Y': 5, 'W': 5, 'K': 5, 'R': 5};
+        const AA_SIZE_LABEL = { 1: "Very Small", 2: "Small", 3: "Medium", 4: "Large", 5: "Very Large"};
+        const AA_CHARGE = { 'R': 'Positive (+)', 'K': 'Positive (+)', 'H': 'Positive (+, Neutral at pH 7.4)', 'D': 'Negative (-)', 'E': 'Negative (-)', 'A': 'Neutral', 'N': 'Neutral', 'C': 'Neutral', 'Q': 'Neutral', 'G': 'Neutral', 'I': 'Neutral', 'L': 'Neutral', 'M': 'Neutral', 'F': 'Neutral', 'P': 'Neutral', 'S': 'Neutral', 'T': 'Neutral', 'W': 'Neutral', 'Y': 'Neutral', 'V': 'Neutral'};
+        const AA_HYDROPHOBICITY_SIMPLE = { 'A': 'Hydrophobic', 'V': 'Hydrophobic', 'I': 'Hydrophobic', 'L': 'Hydrophobic', 'M': 'Hydrophobic', 'F': 'Hydrophobic', 'W': 'Hydrophobic', 'Y': 'Hydrophobic', 'C': 'Hydrophobic', 'G': 'Neutral', 'P': 'Neutral', 'S': 'Polar', 'T': 'Polar', 'N': 'Polar', 'Q': 'Polar', 'H': 'Polar', 'D': 'Charged', 'E': 'Charged', 'K': 'Charged', 'R': 'Charged'};
+        function getHbondCapability(aaSymbol) {
+            const res3Letter = AMINO_ACID_MAP_1_TO_3_REV[aaSymbol.toUpperCase()];
+            if (!res3Letter) return "N/A";
+            const sites = HBOND_ATOMS_BY_RES[res3Letter];
+            if (!sites || Object.keys(sites).length === 0) return "None (Sidechain)";
+            let hasDonor = false, hasAcceptor = false;
+            for (const atom in sites) {
+                if (sites[atom] === 'D') hasDonor = true;
+                if (sites[atom] === 'A') hasAcceptor = true;
+                if (sites[atom] === 'B') { hasDonor = true; hasAcceptor = true; }
+            }
+            if (hasDonor && hasAcceptor) return "Both D/A";
+            if (hasDonor) return "Donor";
+            if (hasAcceptor) return "Acceptor";
+            return "None (Sidechain)";
+        }
+
+        // Core functions (logStatus, initViewers, styling, extraction, analysis, etc. - same as v1.22)
+        function logStatus(message) { statusLog.innerHTML = statusLog.innerHTML.replace(/<span class="cursor">.*?<\/span>/g, (match) => match.replace('<span class="cursor">','').replace('</span>','').replace('_','')); statusLog.innerHTML = `> <span class="cursor">${message}</span>\n` + statusLog.innerHTML; const lines = statusLog.innerHTML.split('\n'); if (lines.length > 30) { const trimmedLines = lines.slice(0, 30); if (!trimmedLines[0].includes('<span class="cursor">') && lines[0].includes('<span class="cursor">')) { trimmedLines[0] = `> <span class="cursor">${trimmedLines[0].replace(/^> /,'')}</span>` } statusLog.innerHTML = trimmedLines.join('\n'); } console.log("Log:", message); }
+        function initViewers() { logStatus("Initializing 3Dmol.js viewers..."); let wtInitialized = false, mutantInitialized = false; if (!viewerWT) { try { viewerWT = $3Dmol.createViewer(viewerWTContainer, { backgroundColor: '#050805' }); wtInitialized = true; } catch (e) { logStatus("ERROR initializing Wild-Type viewer: " + e.message); } } else wtInitialized = true; if (!viewerMutant) { try { viewerMutant = $3Dmol.createViewer(viewerMutantContainer, { backgroundColor: '#050805' }); mutantInitialized = true; } catch (e) { logStatus("ERROR initializing Mutant viewer: " + e.message); } } else mutantInitialized = true; if (wtInitialized && mutantInitialized) { logStatus("Viewers initialized successfully."); viewerWT.linkViewer(viewerMutant); viewerMutant.linkViewer(viewerWT); viewerWT.resize(); viewerMutant.resize(); viewerWT.render(); viewerMutant.render(); } else { logStatus("One or both viewers failed to initialize."); } }
+        function applyDefaultStylesToViewer(viewerInstance, render = true) { if (!viewerInstance) return; viewerInstance.setStyle({}, { cartoon: { color: 'spectrum' } }); viewerInstance.addStyle({ hetatm: true, within: { distance: 5, sel: { organic: true } } }, { stick: { radius: 0.3, colorscheme: 'element' } }); viewerInstance.addStyle({ hetatm: true, organic: false }, { sphere: { radius: 0.7, color: 'grey' } }); if (render) viewerInstance.render(); }
+        function extractSequence(data, format) { logStatus(`Extracting AA/NA sequence(s) & mapping from ${format.toUpperCase()} data...`); const sequences = {}; let lastProcessedResidueKey = null; const lines = data.split('\n'); try { if (format === 'pdb') { for (const line of lines) { if (line.startsWith('ATOM')) { const originalChainID = line.substring(21, 22).trim() || 'A'; const originalResName = line.substring(17, 20).trim(); const resiNumString = line.substring(22, 26).trim(); const originalICode = line.substring(26, 27).trim() || null; const originalResiNum = parseInt(resiNumString, 10); const oneLetterCode = getSequenceLetter(originalResName); if (!isNaN(originalResiNum) && oneLetterCode !== 'X') { const currentResidueKey = `${originalChainID}:${resiNumString}${originalICode || ''}`; if (currentResidueKey !== lastProcessedResidueKey) { if (!sequences[originalChainID]) { sequences[originalChainID] = []; } sequences[originalChainID].push({ oneLetterCode, originalChainID, originalResiNum, originalResName, originalICode }); lastProcessedResidueKey = currentResidueKey; } } } } } else if (format === 'cif') { let inAtomSiteLoop = false; let columnMap = {}; for (const line of lines) { const trimmedLine = line.trim(); if (trimmedLine.startsWith('loop_')) inAtomSiteLoop = false; else if (trimmedLine === '_atom_site.') { inAtomSiteLoop = true; columnMap = {}; } else if (inAtomSiteLoop && trimmedLine.startsWith('_atom_site.')) columnMap[trimmedLine] = Object.keys(columnMap).length; else if (inAtomSiteLoop && !trimmedLine.startsWith('_') && trimmedLine !== '' && trimmedLine !== '#' && Object.keys(columnMap).length > 0) { const columns = trimmedLine.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || []; const indices = { groupPDB: columnMap['_atom_site.group_PDB'], labelCompId: columnMap['_atom_site.label_comp_id'], authAsymId: columnMap['_atom_site.auth_asym_id'], authSeqId: columnMap['_atom_site.auth_seq_id'], pdbxInsCode: columnMap['_atom_site.pdbx_PDB_ins_code'] }; if (indices.authAsymId === undefined) indices.authAsymId = columnMap['_atom_site.label_asym_id']; if (indices.authSeqId === undefined) indices.authSeqId = columnMap['_atom_site.label_seq_id']; if (indices.groupPDB === undefined || indices.labelCompId === undefined || indices.authAsymId === undefined || indices.authSeqId === undefined) { if(!columnMap.checkedError) { columnMap.checkedError = true; } continue; } const group = (columns[indices.groupPDB] || '').replace(/["']/g, ''); if (group === 'ATOM') { const originalChainID = (columns[indices.authAsymId] || 'A').replace(/["']/g, ''); const originalResName = (columns[indices.labelCompId] || '').replace(/["']/g, ''); const resiNumString = (columns[indices.authSeqId] || '').replace(/["']/g, ''); const originalResiNum = parseInt(resiNumString, 10); const originalICode = indices.pdbxInsCode !== undefined && columns[indices.pdbxInsCode] && columns[indices.pdbxInsCode] !== '.' && columns[indices.pdbxInsCode] !== '?' ? columns[indices.pdbxInsCode].replace(/["']/g, '') : null; const oneLetterCode = getSequenceLetter(originalResName); if (!isNaN(originalResiNum) && oneLetterCode !== 'X') { const currentResidueKey = `${originalChainID}:${resiNumString}${originalICode || ''}`; if (currentResidueKey !== lastProcessedResidueKey) { if (!sequences[originalChainID]) { sequences[originalChainID] = []; } sequences[originalChainID].push({ oneLetterCode, originalChainID, originalResiNum, originalResName, originalICode }); lastProcessedResidueKey = currentResidueKey; } } } } else if (trimmedLine.startsWith('#') && inAtomSiteLoop) { inAtomSiteLoop = false; } } if (Object.keys(columnMap).length === 0 || columnMap.checkedError && Object.keys(sequences).length === 0 ) { } } else { logStatus(`ERROR: Sequence extraction not implemented for format: ${format}`); return null; } if (Object.keys(sequences).length > 0) { logStatus("Sequence extraction & mapping successful."); return sequences; } else { logStatus("WARNING: No standard AA/NA sequences for mapping found in ATOM records."); return {}; } } catch (error) { logStatus(`ERROR during sequence extraction/mapping: ${error.message}`); console.error("Sequence Extraction/Mapping Error:", error); return null; } }
+        function applyAndRefreshStyles(viewerInstance) {
+            if (!viewerInstance || !viewerInstance.getModel()) return;
+            viewerInstance.removeAllLabels();
+            viewerInstance.removeAllShapes();
+            viewerInstance.setStyle({}, { cartoon: { color: 'spectrum' } });
+            viewerInstance.addStyle({ hetatm: true, resn: ["HOH", "WAT"] }, { sphere: { radius: 0.5, color: 'grey', opacity: 0.7 } });
+            viewerInstance.addStyle({ hetatm: true, not: { resn: ["HOH", "WAT"] } }, { stick: { radius: 0.3, colorscheme: 'element' } });
+
+            if (bindingSitesHighlighted && bindingSiteDisplaySelections.length > 0) {
+                const bindingSiteStyle = { cartoon: { color: 'blue', opacity:0.7 }, stick: { colorscheme: 'blueCarbon', radius:0.2 } };
+                bindingSiteDisplaySelections.forEach(sel => viewerInstance.addStyle(sel, bindingSiteStyle));
+            }
+            if (viewerInstance === viewerMutant && currentMutation.residueInfo && currentMutation.newAA) {
+                const resInfo = currentMutation.residueInfo;
+                const selectionSpec = { chain: resInfo.originalChainID, resi: resInfo.originalResiNum };
+                if (resInfo.originalICode) selectionSpec.iCode = resInfo.originalICode;
+                const highlightStyle = { stick: { color: 'magenta', radius: 0.4 }, sphere: { color: 'magenta', radius: 0.8 } };
+                viewerInstance.addStyle(selectionSpec, highlightStyle);
+                const labelSelectionSpec = { ...selectionSpec, atom: ['CA', 'N', 'C'] };
+                currentMutation.labelObjectMutant = viewerInstance.addLabel(currentMutation.newAA, {
+                    inFront: true, fontSize: 14, fontColor: "lime", backgroundColor: "black",
+                    backgroundOpacity: 0.6, showBackground: true, borderThickness: 0.5, borderColor: "lime"
+                }, labelSelectionSpec);
+            }
+            if (viewerInstance === viewerWT && currentMutation.interactionShapes.length > 0) {
+                currentMutation.interactionShapes.forEach(shapeData => viewerInstance.addCylinder(shapeData));
+            }
+            viewerInstance.render();
+        }
+        function resetAllAnalysisPanels() {
+            stericOutputElement.textContent = "N/A";
+            interactionOutputElement.textContent = "N/A";
+            bindingSiteProximityOutputElement.textContent = "N/A";
+            bindingDisruptionOutputElement.textContent = "N/A";
+            impactScoreOutputElement.textContent = "N/A";
+            pathogenicityRiskTextElement.textContent = "N/A";
+            pathogenicityRiskTextElement.style.color = 'var(--hacker-fg-dim)';
+            pathogenicityRiskIndicatorElement.style.backgroundColor = 'var(--hacker-fg-dim)';
+            generatePdfBtn.disabled = true;
+            populateSummaryChart();
+        }
+        function displayStructure(data, format) {
+            if (!viewerWT || !viewerMutant) { logStatus("ERROR: Viewers not initialized."); return; }
+            if (!data || typeof data !== 'string' || data.trim() === '') { logStatus("ERROR: No valid structure data provided."); return; }
+            if (!format || (format !== 'pdb' && format !== 'cif')) { logStatus(`ERROR: Invalid format: '${format}'.`); return; }
+            logStatus(`Processing ${format.toUpperCase()} data for dual view...`);
+
+            extractedSequences = null; sequenceOutputElement.textContent = "Processing...";
+            resetAllAnalysisPanels();
+
+            currentMutation = { residueInfo: null, newAA: null, labelObjectMutant: null, interactionShapes: [], nearbyAtomCount: 0, lostHBondsCount: 0, proximityToBindingSite: null, overallImpactScore: null, bindingDisruptionScore: null, riskLevel: null, riskColor: null, loadedFileName: currentMutation.loadedFileName || "N/A" };
+            bindingSitesHighlighted = false; bindingSiteResidueKeys.clear(); bindingSiteDisplaySelections = []; bindingSiteStatusSpan.textContent = "Sites hidden.";
+            mutationStatusSpan.textContent = "No mutation applied."; mutationInput.value = '';
+
+            try {
+                viewerWT.clear(); viewerMutant.clear();
+                viewerWT.addModel(data, format); viewerMutant.addModel(data, format);
+                applyAndRefreshStyles(viewerWT); applyAndRefreshStyles(viewerMutant);
+                viewerWT.zoomTo(); viewerMutant.zoomTo();
+                logStatus(`Structure (${format.toUpperCase()}) rendered.`);
+                extractedSequences = extractSequence(data, format);
+                findAndStoreBindingSiteResidues();
+                if (extractedSequences && Object.keys(extractedSequences).length > 0) { let displayText = ""; for (const chainFileID in extractedSequences) { const residueInfoArray = extractedSequences[chainFileID]; let sequenceString = residueInfoArray.map(info => info.oneLetterCode).join(''); let formattedSequence = ""; for(let i = 0; i < sequenceString.length; i += 60) { formattedSequence += sequenceString.substring(i, Math.min(i + 60, sequenceString.length)) + "\n"; } displayText += `Chain ${chainFileID} (${sequenceString.length} residues/bases):\n${formattedSequence.trim()}\n\n`; } sequenceOutputElement.textContent = displayText.trim(); } else if (extractedSequences) { sequenceOutputElement.textContent = "No standard protein/nucleic acid sequences found for mapping in ATOM records."; } else { sequenceOutputElement.textContent = "Sequence extraction/mapping failed. See status log."; }
+            } catch (e) { logStatus(`ERROR rendering/extracting: ${e.message}`); console.error(e); sequenceOutputElement.textContent = "Error processing."; }
+        }
+        fileInput.addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            structureData = null; structureFormat = null;
+            currentMutation = { residueInfo: null, newAA: null, labelObjectMutant: null, interactionShapes: [], nearbyAtomCount: 0, lostHBondsCount: 0, proximityToBindingSite: null, overallImpactScore: null, bindingDisruptionScore: null, riskLevel: null, riskColor: null, loadedFileName: "N/A" };
+            extractedSequences = null; bindingSitesHighlighted = false; bindingSiteResidueKeys.clear(); bindingSiteDisplaySelections = [];
+
+            const resetPanelsAndRiskDisplay = () => {
+                sequenceOutputElement.textContent = "No sequence extracted yet.";
+                resetAllAnalysisPanels();
+                bindingSiteStatusSpan.textContent = "Sites hidden.";
+                mutationStatusSpan.textContent = "No mutation.";
+                mutationInput.value = '';
+            };
+
+            if (!file) { logStatus("No file selected."); currentFileSpan.textContent = "No file loaded."; resetPanelsAndRiskDisplay(); return; }
+
+            currentMutation.loadedFileName = file.name;
+            const fileNameLower = file.name.toLowerCase(); let isPdb = fileNameLower.endsWith('.pdb'); let isCif = fileNameLower.endsWith('.cif') || fileNameLower.endsWith('.mmcif'); let isGz = fileNameLower.endsWith('.gz'); let baseFormat = null;
+            if (isGz) { if (fileNameLower.endsWith('.pdb.gz')) baseFormat = 'pdb'; else if (fileNameLower.endsWith('.cif.gz') || fileNameLower.endsWith('.mmcif.gz')) baseFormat = 'cif'; else { logStatus(`WARNING: Guessing format for '${file.name}'. Assuming PDB.`); baseFormat = 'pdb'; } } else if (isPdb) baseFormat = 'pdb'; else if (isCif) baseFormat = 'cif';
+
+            if (!baseFormat) { logStatus(`ERROR: Invalid file type (${file.name}).`); fileInput.value = null; currentFileSpan.textContent = "Invalid file type."; currentMutation.loadedFileName = "Invalid file type"; resetPanelsAndRiskDisplay(); sequenceOutputElement.textContent = "Invalid file type."; return; }
+            structureFormat = baseFormat;
+            logStatus(`Accessing file: ${file.name} (${(file.size / 1024).toFixed(2)} KB). Format: ${structureFormat.toUpperCase()}${isGz ? ' (GZ)' : ''}`);
+            currentFileSpan.textContent = `Processing: ${file.name}`;
+            resetPanelsAndRiskDisplay();
+            sequenceOutputElement.textContent = "Reading file...";
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                logStatus("File read successful. Processing content..."); const arrayBuffer = e.target.result; let processedData = null;
+                try {
+                    if (isGz) { logStatus("Decompressing GZip data..."); processedData = pako.inflate(new Uint8Array(arrayBuffer), { to: 'string' }); logStatus("Decompression successful."); } else { logStatus(`Decoding plain text ${structureFormat.toUpperCase()}...`); processedData = new TextDecoder('utf-8').decode(arrayBuffer); }
+                    structureData = processedData;
+                    if (structureData && structureFormat) { displayStructure(structureData, structureFormat); currentFileSpan.textContent = `Loaded: ${file.name}`; } else throw new Error("Processed data or format is missing.");
+                } catch (err) { logStatus(`ERROR processing file content: ${err.message}`); console.error("File Processing Error:", err); currentFileSpan.textContent = `Error processing: ${file.name}`; structureData = null; structureFormat = null; currentMutation.loadedFileName = `Error processing ${file.name}`; resetPanelsAndRiskDisplay(); sequenceOutputElement.textContent = "Error processing file."; }
+            };
+            reader.onerror = function(e) { logStatus("ERROR reading file: " + reader.error); console.error("File Reading Error:", reader.error); currentFileSpan.textContent = "Error reading file."; structureData = null; structureFormat = null; currentMutation.loadedFileName = `Error reading ${file.name}`; resetPanelsAndRiskDisplay(); sequenceOutputElement.textContent = "Error reading file."; };
+            reader.readAsArrayBuffer(file);
+        });
+        function performStericAnalysis(residueInfo, newAminoAcid) { if (!viewerWT || !residueInfo) { stericOutputElement.textContent = "Error: Viewer or residue info missing for steric check."; currentMutation.nearbyAtomCount = 0; return; } logStatus("Running heuristic steric hindrance analysis..."); let stericText = `Mutation: ${residueInfo.originalResName}${residueInfo.originalResiNum} (${residueInfo.oneLetterCode}) -> ${newAminoAcid}\n`; const CLASH_RADIUS_BASE = 3.5, CLASH_RADIUS_BULKY = 4.5; const isNewAABulky = BULKY_AMINO_ACIDS.includes(newAminoAcid.toUpperCase()); const effectiveClashRadius = isNewAABulky ? CLASH_RADIUS_BULKY : CLASH_RADIUS_BASE; const originalResAtoms = viewerWT.selectedAtoms({ chain: residueInfo.originalChainID, resi: residueInfo.originalResiNum, ...(residueInfo.originalICode && {iCode: residueInfo.originalICode}) }); const caAtom = originalResAtoms.find(a => a.atom === 'CA'); let nearbyAtomCount = 0; if (caAtom) { const allAtoms = viewerWT.getModel().selectedAtoms({}); for (const atom of allAtoms) { if ((atom.chain === residueInfo.originalChainID && atom.resi === residueInfo.originalResiNum && (atom.icode === residueInfo.originalICode || (!atom.icode && !residueInfo.originalICode))) || atom.elem === 'H') continue; const distSquared = (caAtom.x - atom.x)**2 + (caAtom.y - atom.y)**2 + (caAtom.z - atom.z)**2; if (distSquared < effectiveClashRadius**2) nearbyAtomCount++; } stericText += `Analysis based on C-alpha proximity (radius ${effectiveClashRadius}Å, new AA is ${isNewAABulky ? 'bulky' : 'not bulky'}).\n`; stericText += `Found ${nearbyAtomCount} non-H atoms from other residues within this radius.\n`; if (nearbyAtomCount > (isNewAABulky ? 8 : 12)) stericText += "ALERT: Site is crowded. Mutation may cause steric clashes.\n"; else if (nearbyAtomCount > (isNewAABulky ? 4 : 6)) stericText += "Warning: Site has moderate crowding.\n"; else stericText += "Info: Site appears relatively uncrowded.\n"; } else { stericText += "C-alpha atom not found for original residue. Cannot perform detailed steric check.\n"; } currentMutation.nearbyAtomCount = nearbyAtomCount; stericOutputElement.textContent = stericText; logStatus(`Steric analysis: ${nearbyAtomCount} atoms near CA.`);}
+        function performInteractionAnalysis(residueInfo, newAminoAcid) { if (!viewerWT || !residueInfo) { interactionOutputElement.textContent = "Error: Viewer or residue info missing for interaction analysis."; currentMutation.lostHBondsCount = 0; return; } logStatus("Analyzing potential H-bond interaction changes..."); let interactionText = `H-bond Impact: ${residueInfo.originalResName}${residueInfo.originalResiNum} (${residueInfo.oneLetterCode}) -> ${newAminoAcid}\n\n`; let potentialLostInteractions = []; let lostCount = 0; const HBOND_MAX_DIST_SQ = 3.5 * 3.5; const originalResAtoms = viewerWT.selectedAtoms({ chain: residueInfo.originalChainID, resi: residueInfo.originalResiNum, ...(residueInfo.originalICode && {iCode: residueInfo.originalICode}) }); if (originalResAtoms.length === 0) { interactionOutputElement.textContent = "Could not find atoms for the specified residue."; currentMutation.lostHBondsCount = 0; return; } const originalRes3Letter = residueInfo.originalResName; const newRes3Letter = AMINO_ACID_MAP_1_TO_3_REV[newAminoAcid]; const originalHBondSites = HBOND_ATOMS_BY_RES[originalRes3Letter] || {}; const newHBondSites = HBOND_ATOMS_BY_RES[newRes3Letter] || {}; currentMutation.interactionShapes.forEach(shape => viewerWT.removeShape(shape.id)); currentMutation.interactionShapes = []; originalResAtoms.forEach(atom1 => { let atom1Type = null; if (atom1.atom === BACKBONE_N && atom1.elem === 'N') atom1Type = 'D'; else if (atom1.atom === BACKBONE_O && atom1.elem === 'O') atom1Type = 'A'; else if (originalHBondSites[atom1.atom]) atom1Type = originalHBondSites[atom1.atom]; if (!atom1Type) return; const nearbyAtoms = viewerWT.selectedAtoms({ within: {distance: 4.0, sel: {x:atom1.x, y:atom1.y, z:atom1.z}}, not: { chain: residueInfo.originalChainID, resi: residueInfo.originalResiNum, ...(residueInfo.originalICode && {iCode: residueInfo.originalICode}) } }); nearbyAtoms.forEach(atom2 => { if (atom2.elem === 'H') return; let atom2Type = null; const atom2ResInfo = extractedSequences[atom2.chain]?.find(r => r.originalResiNum === atom2.resi && (r.originalICode || null) === (atom2.icode || null) ); const atom2ResName = atom2ResInfo ? atom2ResInfo.originalResName : atom2.resn; const atom2HBondSites = HBOND_ATOMS_BY_RES[atom2ResName] || {}; if (atom2.atom === BACKBONE_N && atom2.elem === 'N') atom2Type = 'D'; else if (atom2.atom === BACKBONE_O && atom2.elem === 'O') atom2Type = 'A'; else if (atom2HBondSites[atom2.atom]) atom2Type = atom2HBondSites[atom2.atom]; if (!atom2Type) return; const distSq = (atom1.x - atom2.x)**2 + (atom1.y - atom2.y)**2 + (atom1.z - atom2.z)**2; if (distSq < HBOND_MAX_DIST_SQ) { const isPossibleHBond = ((atom1Type === 'D' || atom1Type === 'B') && (atom2Type === 'A' || atom2Type === 'B')) || ((atom1Type === 'A' || atom1Type === 'B') && (atom2Type === 'D' || atom2Type === 'B')); if (isPossibleHBond) { let isLost = false; if(atom1.atom !== BACKBONE_N && atom1.atom !== BACKBONE_O) { if(!newHBondSites[atom1.atom]) { isLost = true; } } const interaction = { atom1: { ...atom1 }, atom2: { ...atom2 }, type: "Potential H-bond", lost: isLost }; const existing = potentialLostInteractions.find(p => (p.atom1.serial === atom1.serial && p.atom2.serial === atom2.serial) || (p.atom1.serial === atom2.serial && p.atom2.serial === atom1.serial)); if (!existing) potentialLostInteractions.push(interaction); } } }); }); if (potentialLostInteractions.length > 0) { interactionText += "Original Residue's Potential H-bonds:\n"; potentialLostInteractions.forEach(inter => { interactionText += `- ${inter.atom1.resn}${inter.atom1.resi}.${inter.atom1.atom} -- ${inter.atom2.resn}${inter.atom2.resi}.${inter.atom2.atom}. `; if (inter.lost) { lostCount++; interactionText += " Status: LIKELY LOST.\n"; const shape = viewerWT.addCylinder({ start: {x:inter.atom1.x, y:inter.atom1.y, z:inter.atom1.z}, end:   {x:inter.atom2.x, y:inter.atom2.y, z:inter.atom2.z}, radius: 0.08, fromCap: 1, toCap: 1, dashed: true, color: 'yellow' }); currentMutation.interactionShapes.push(shape); } else { interactionText += " Status: May persist/change.\n"; } }); if(lostCount > 0) interactionText += `\nTotal ${lostCount} sidechain H-bonds likely lost.\n`; viewerWT.render(); } else { interactionText += "No significant H-bond interactions involving the original residue's sidechain were heuristically detected.\n"; } currentMutation.lostHBondsCount = lostCount; interactionOutputElement.textContent = interactionText; logStatus("H-bond interaction analysis complete.");}
+        function calculateAndShowImpactScore(residueInfo, newAminoAcid, nearbyAtomCount, lostHBondsCount) {
+            if (!residueInfo || newAminoAcid === undefined || nearbyAtomCount === undefined || lostHBondsCount === undefined) {
+                impactScoreOutputElement.textContent = "N/A - Missing data for score.";
+                currentMutation.overallImpactScore = null; return;
+            }
+            logStatus("Calculating heuristic impact score...");
+            let impactText = `Predicted Impact for ${residueInfo.oneLetterCode} -> ${newAminoAcid} at ${residueInfo.originalChainID}:${residueInfo.originalResiNum}:\n\n`;
+            const originalSizeCat = AMINO_ACID_SIZE_CATEGORY[residueInfo.oneLetterCode] || 3;
+            const newSizeCat = AMINO_ACID_SIZE_CATEGORY[newAminoAcid] || 3;
+            const sizeDiff = newSizeCat - originalSizeCat;
+            let sizeChangeScore = Math.abs(sizeDiff) * 2;
+            if (sizeDiff > 0 && BULKY_AMINO_ACIDS.includes(newAminoAcid)) sizeChangeScore *= 1.5;
+            let stericScore = 0;
+            if (nearbyAtomCount > 12) stericScore = 10; else if (nearbyAtomCount > 8) stericScore = 7; else if (nearbyAtomCount > 4) stericScore = 4; else if (nearbyAtomCount > 0) stericScore = 1;
+            let interactionScore = lostHBondsCount * 5;
+            let totalImpactScore = sizeChangeScore + stericScore + interactionScore;
+            totalImpactScore = Math.min(Math.max(totalImpactScore, 0), 100);
+            currentMutation.overallImpactScore = totalImpactScore;
+            impactText += `Size Change Factor: ${sizeDiff} (Score: ${sizeChangeScore.toFixed(1)})\n`;
+            impactText += `(Original size category: ${originalSizeCat}, New: ${newSizeCat})\n`;
+            impactText += `Steric Hindrance (Nearby Atoms): ${nearbyAtomCount} (Score: ${stericScore.toFixed(1)})\n`;
+            impactText += `Lost H-Bonds (Sidechain): ${lostHBondsCount} (Score: ${interactionScore.toFixed(1)})\n\n`;
+            impactText += `TOTAL PREDICTED IMPACT SCORE: ${totalImpactScore.toFixed(1)} / 100\n\n`;
+            if (totalImpactScore > 70) impactText += "Interpretation: HIGH potential impact. Significant changes expected.\n";
+            else if (totalImpactScore > 40) impactText += "Interpretation: MEDIUM potential impact. Notable changes likely.\n";
+            else if (totalImpactScore > 10) impactText += "Interpretation: LOW potential impact. Minor changes possible.\n";
+            else impactText += "Interpretation: VERY LOW potential impact. Mutation likely tolerated well.\n";
+            impactScoreOutputElement.textContent = impactText;
+            logStatus(`Impact score calculated: ${totalImpactScore.toFixed(1)}`);
+        }
+        function findAndStoreBindingSiteResidues() { if (!viewerWT || !viewerWT.getModel()) return; logStatus("Identifying potential binding site residues..."); bindingSiteResidueKeys.clear(); bindingSiteDisplaySelections = []; const BINDING_RADIUS = 4.5; const hetatmSel = { hetatms: true, organic:true, not: { resn: ["HOH", "WAT"] } }; const hetatmAtoms = viewerWT.selectedAtoms(hetatmSel); if (hetatmAtoms.length === 0) { logStatus("No suitable non-water HETATMs found to define binding sites."); return; } const uniqueHetatmResidues = new Map(); hetatmAtoms.forEach(atom => { const key = `${atom.chain}:${atom.resi}:${atom.resn}${atom.icode || ''}`; if (!uniqueHetatmResidues.has(key)) { uniqueHetatmResidues.set(key, {chain: atom.chain, resi: atom.resi, resn: atom.resn, ...(atom.icode && {iCode: atom.icode}) }); } }); const tempBindingSiteDisplaySelections = []; uniqueHetatmResidues.forEach(hetRes => { const ligandSel = {chain: hetRes.chain, resi: hetRes.resi, resn: hetRes.resn, ...(hetRes.iCode && {iCode: hetRes.iCode}) }; const nearbyResAtoms = viewerWT.selectedAtoms({ protein: true, nucleic: true, within: { distance: BINDING_RADIUS, sel: ligandSel } }); nearbyResAtoms.forEach(atom => { const resKey = `${atom.chain}:${atom.resi}${atom.icode || ''}`; bindingSiteResidueKeys.add(resKey); }); tempBindingSiteDisplaySelections.push({ protein: true, nucleic: true, within: { distance: BINDING_RADIUS, sel: ligandSel } }); }); bindingSiteDisplaySelections = tempBindingSiteDisplaySelections; logStatus(`Found ${bindingSiteResidueKeys.size} unique residues in ${bindingSiteDisplaySelections.length} potential binding regions.`); }
+        function checkMutationProximityToBindingSites(mutatedResidueInfo) { currentMutation.proximityToBindingSite = { status: "N/A", details: "Binding sites not identified or mutation not set." }; if (!viewerWT || !mutatedResidueInfo || bindingSiteResidueKeys.size === 0) { let msg = "N/A - Apply mutation."; if(bindingSiteResidueKeys.size === 0 && structureData) msg += "\n(Hint: Identify binding sites via HETATMs first if present, or toggle if already found)"; else if (!mutatedResidueInfo && structureData) msg = "N/A - Apply mutation to check proximity."; else if (!structureData) msg = "N/A - Load structure."; bindingSiteProximityOutputElement.textContent = msg; return currentMutation.proximityToBindingSite; } logStatus("Checking mutation proximity to binding sites..."); let proximityText = `Mutation: ${mutatedResidueInfo.originalResName}${mutatedResidueInfo.originalResiNum} (${mutatedResidueInfo.oneLetterCode})\n\n`; const mutatedResKey = `${mutatedResidueInfo.originalChainID}:${mutatedResidueInfo.originalResiNum}${mutatedResidueInfo.originalICode || ''}`; if (bindingSiteResidueKeys.has(mutatedResKey)) { proximityText += "STATUS: Mutated residue IS PART of a potential binding site region."; currentMutation.proximityToBindingSite = { status: "IN_SITE", distance: 0, details: proximityText }; bindingSiteProximityOutputElement.textContent = proximityText; logStatus("Proximity: Mutated residue is IN a binding site region."); return currentMutation.proximityToBindingSite; } let minDistance = Infinity; let nearestBindingSiteResKey = null; const mutatedAtomSel = { chain: mutatedResidueInfo.originalChainID, resi: mutatedResidueInfo.originalResiNum, ...(mutatedResidueInfo.originalICode && {iCode: mutatedResidueInfo.originalICode}), atom: ['CA', 'P']}; const mutatedCentralAtoms = viewerWT.selectedAtoms(mutatedAtomSel); if (mutatedCentralAtoms.length === 0) { proximityText += "Could not find C-alpha/Phosphate of mutated residue for distance check."; currentMutation.proximityToBindingSite = { status: "ERROR", details: proximityText }; bindingSiteProximityOutputElement.textContent = proximityText; return currentMutation.proximityToBindingSite; } const mutatedCentralAtom = mutatedCentralAtoms[0]; bindingSiteResidueKeys.forEach(bsKey => { const parts = bsKey.match(/([^:]+):(\d+)([A-Z]?)/); if (!parts) return; const bsChain = parts[1], bsResi = parseInt(parts[2]), bsICode = parts[3] || null; const bsAtomSel = { chain: bsChain, resi: bsResi, ...(bsICode && {iCode: bsICode}), atom: ['CA', 'P'] }; const bsCentralAtoms = viewerWT.selectedAtoms(bsAtomSel); if (bsCentralAtoms.length > 0) { const bsCentralAtom = bsCentralAtoms[0]; const distSq = (mutatedCentralAtom.x - bsCentralAtom.x)**2 + (mutatedCentralAtom.y - bsCentralAtom.y)**2 + (mutatedCentralAtom.z - bsCentralAtom.z)**2; const dist = Math.sqrt(distSq); if (dist < minDistance) { minDistance = dist; nearestBindingSiteResKey = bsKey; } } }); const PROXIMITY_THRESHOLD = 6.0; if (minDistance <= PROXIMITY_THRESHOLD) { proximityText += `STATUS: Mutated residue IS NEAR a potential binding site region.\n(Approx. ${minDistance.toFixed(1)}Å to ${nearestBindingSiteResKey} C-alpha/P)`; currentMutation.proximityToBindingSite = { status: "NEAR_SITE", distance: minDistance, details: proximityText }; logStatus(`Proximity: NEAR (${minDistance.toFixed(1)}Å) to ${nearestBindingSiteResKey}.`); } else { proximityText += "STATUS: Mutated residue is NOT DETECTED in or near any identified potential binding site regions."; if(minDistance !== Infinity) proximityText += `\n(Nearest binding site residue C-alpha/P is > ${PROXIMITY_THRESHOLD}Å away)`; currentMutation.proximityToBindingSite = { status: "NOT_NEAR", distance: minDistance, details: proximityText }; logStatus("Proximity: Not near binding site regions."); } bindingSiteProximityOutputElement.textContent = proximityText; return currentMutation.proximityToBindingSite; }
+        function predictBindingDisruption(residueInfo, newAminoAcid, proximityInfo, nearbyAtomCount, lostHBondsCount) {
+            if (!residueInfo || !newAminoAcid || !proximityInfo) {
+                bindingDisruptionOutputElement.textContent = "N/A - Missing data for prediction.";
+                currentMutation.bindingDisruptionScore = null; return;
+            }
+            logStatus("Predicting binding disruption...");
+            let disruptionText = `Binding Disruption Prediction for ${residueInfo.oneLetterCode} -> ${newAminoAcid} at ${residueInfo.originalChainID}:${residueInfo.originalResiNum}:\n\n`;
+            let disruptionScore = 0;
+            let proximityScore = 0;
+            if (proximityInfo.status === "IN_SITE") { proximityScore = 40; disruptionText += "- Mutation is IN a binding site region. (Score: +40)\n"; }
+            else if (proximityInfo.status === "NEAR_SITE" && proximityInfo.distance < 6.0) { proximityScore = 20; disruptionText += `- Mutation is NEAR a binding site region (${proximityInfo.distance.toFixed(1)}Å). (Score: +20)\n`; }
+            else { disruptionText += "- Mutation is not directly in or immediately near identified binding sites.\n"; }
+            disruptionScore += proximityScore;
+            let sizeChangeScore = 0;
+            if (proximityInfo.status === "IN_SITE" || (proximityInfo.status === "NEAR_SITE" && proximityInfo.distance < 8.0)) {
+                const originalSizeCat = AMINO_ACID_SIZE_CATEGORY[residueInfo.oneLetterCode] || 3;
+                const newSizeCat = AMINO_ACID_SIZE_CATEGORY[newAminoAcid] || 3;
+                const sizeDiff = Math.abs(newSizeCat - originalSizeCat);
+                if (sizeDiff >= 3) sizeChangeScore = 15; else if (sizeDiff === 2) sizeChangeScore = 10; else if (sizeDiff === 1) sizeChangeScore = 5;
+                if(sizeChangeScore > 0) disruptionText += `- Significant size change (${sizeDiff} categories) at/near site. (Score: +${sizeChangeScore})\n`;
+            }
+            disruptionScore += sizeChangeScore;
+            let hBondScore = 0;
+            if (lostHBondsCount > 0 && (proximityInfo.status === "IN_SITE" || (proximityInfo.status === "NEAR_SITE" && proximityInfo.distance < 8.0))) {
+                hBondScore = lostHBondsCount * 10;
+                disruptionText += `- ${lostHBondsCount} sidechain H-bond(s) likely lost at/near site. (Score: +${hBondScore})\n`;
+            }
+            disruptionScore += hBondScore;
+            let stericImpactScore = 0;
+            const isNewBulky = BULKY_AMINO_ACIDS.includes(newAminoAcid);
+            const isOriginalBulky = BULKY_AMINO_ACIDS.includes(residueInfo.oneLetterCode);
+            if (isNewBulky && !isOriginalBulky && (proximityInfo.status === "IN_SITE" || (proximityInfo.status === "NEAR_SITE" && proximityInfo.distance < 6.0))) {
+                if (nearbyAtomCount > 8) { stericImpactScore = 10; disruptionText += `- New bulky AA introduced into a somewhat crowded site. (Score: +${stericImpactScore})\n`; }
+                else if (nearbyAtomCount > 5) { stericImpactScore = 5; disruptionText += `- New bulky AA introduced into a site with some neighbors. (Score: +${stericImpactScore})\n`; }
+            }
+            disruptionScore += stericImpactScore;
+            disruptionScore = Math.min(disruptionScore, 100);
+            currentMutation.bindingDisruptionScore = disruptionScore;
+            disruptionText += `\nTOTAL BINDING DISRUPTION SCORE: ${disruptionScore.toFixed(0)} / 100\n\n`;
+            if (disruptionScore > 60) disruptionText += "Prediction: HIGH likelihood of binding disruption.\n";
+            else if (disruptionScore > 35) disruptionText += "Prediction: MODERATE likelihood of binding disruption.\n";
+            else if (disruptionScore > 10) disruptionText += "Prediction: LOW likelihood of binding disruption.\n";
+            else disruptionText += "Prediction: UNLIKELY to significantly disrupt binding based on these heuristics.\n";
+            bindingDisruptionOutputElement.textContent = disruptionText;
+            logStatus(`Binding disruption score: ${disruptionScore.toFixed(0)}`);
+        }
+        function determineAndDisplayRiskLevel() {
+            if (!currentMutation.residueInfo || currentMutation.overallImpactScore === null || currentMutation.bindingDisruptionScore === null || !currentMutation.proximityToBindingSite) {
+                pathogenicityRiskTextElement.textContent = "N/A";
+                pathogenicityRiskTextElement.style.color = 'var(--hacker-fg-dim)';
+                pathogenicityRiskIndicatorElement.style.backgroundColor = 'var(--hacker-fg-dim)';
+                currentMutation.riskLevel = "N/A"; currentMutation.riskColor = 'var(--hacker-fg-dim)';
+                generatePdfBtn.disabled = true;
+                return;
+            }
+
+            const { residueInfo, newAA, overallImpactScore, bindingDisruptionScore, proximityToBindingSite } = currentMutation;
+            const proximityStatus = proximityToBindingSite.status;
+
+            let riskLevel = "Likely Benign"; let riskColor = 'var(--risk-benign-color)'; let riskReason = "Low overall impact and/or binding disruption scores.";
+            if (bindingDisruptionScore > 65) { riskLevel = "Likely Pathogenic"; riskColor = 'var(--risk-pathogenic-color)'; riskReason = "High binding disruption."; }
+            else if (overallImpactScore > 75 && (proximityStatus === "IN_SITE" || proximityStatus === "NEAR_SITE")) { riskLevel = "Likely Pathogenic"; riskColor = 'var(--risk-pathogenic-color)'; riskReason = "High impact at/near binding site."; }
+            else if (overallImpactScore > 85) { riskLevel = "Likely Pathogenic"; riskColor = 'var(--risk-pathogenic-color)'; riskReason = "Very high overall impact."; }
+            else if (bindingDisruptionScore > 35) { riskLevel = "Uncertain"; riskColor = 'var(--risk-uncertain-color)'; riskReason = "Moderate binding disruption."; }
+            else if (overallImpactScore > 45 && (proximityStatus === "IN_SITE" || proximityStatus === "NEAR_SITE")) { riskLevel = "Uncertain"; riskColor = 'var(--risk-uncertain-color)'; riskReason = "Moderate impact at/near binding site."; }
+            else if (overallImpactScore > 55) { riskLevel = "Uncertain"; riskColor = 'var(--risk-uncertain-color)'; riskReason = "Moderate-high overall impact."; }
+            else if (proximityStatus === "IN_SITE" && (overallImpactScore > 20 || bindingDisruptionScore > 10)) { riskLevel = "Uncertain"; riskColor = 'var(--risk-uncertain-color)'; riskReason = "In binding site w/ some impact."; }
+
+            pathogenicityRiskTextElement.textContent = riskLevel;
+            pathogenicityRiskTextElement.style.color = riskColor;
+            pathogenicityRiskIndicatorElement.style.backgroundColor = riskColor;
+            currentMutation.riskLevel = riskLevel; currentMutation.riskColor = riskColor;
+
+            if (tosAgreed) { // Only enable PDF button if ToS is agreed
+                generatePdfBtn.disabled = false;
+            } else {
+                generatePdfBtn.disabled = true;
+            }
+            logStatus(`Risk: ${riskLevel} (${residueInfo.originalChainID}:${residueInfo.originalResiNum} ${residueInfo.oneLetterCode}>${newAA}). Reason: ${riskReason}`);
+        }
+        function getScoreBarColor(score) {
+            if (score > 70) return 'var(--bar-very-high-color)';
+            if (score > 40) return 'var(--bar-high-color)';
+            if (score > 10) return 'var(--bar-medium-color)';
+            return 'var(--bar-low-color)';
+        }
+        function populateSummaryChart() {
+            const { residueInfo, newAA, overallImpactScore, bindingDisruptionScore, riskLevel, riskColor, lostHBondsCount, nearbyAtomCount, proximityToBindingSite } = currentMutation;
+
+            if (!residueInfo || !newAA) {
+                summaryMutationOverview.textContent = "N/A - Apply mutation first.";
+                summaryRiskLevelText.textContent = "N/A";
+                summaryRiskLevelText.style.color = 'var(--hacker-fg-dim)';
+                summaryImpactScoreBar.style.width = "0%"; summaryImpactScoreBar.textContent = "0"; summaryImpactScoreBar.style.backgroundColor = 'var(--bar-low-color)';
+                summaryDisruptionScoreBar.style.width = "0%"; summaryDisruptionScoreBar.textContent = "0"; summaryDisruptionScoreBar.style.backgroundColor = 'var(--bar-low-color)';
+                summaryAAPropsTableBody.querySelectorAll('td[data-prop]').forEach(td => td.textContent = "N/A");
+                summaryInsightsList.innerHTML = "<li>N/A</li>";
+                return;
+            }
+
+            summaryMutationOverview.textContent = `Mutation: ${residueInfo.originalChainID}:${residueInfo.originalResiNum} (${residueInfo.oneLetterCode} -> ${newAA})`;
+            summaryRiskLevelText.textContent = riskLevel || "N/A";
+            summaryRiskLevelText.style.color = riskColor || 'var(--hacker-fg-dim)';
+
+            const impactScore = overallImpactScore !== null ? overallImpactScore : 0;
+            summaryImpactScoreBar.style.width = `${impactScore}%`;
+            summaryImpactScoreBar.textContent = impactScore.toFixed(0);
+            summaryImpactScoreBar.style.backgroundColor = getScoreBarColor(impactScore);
+
+            const disruptionScore = bindingDisruptionScore !== null ? bindingDisruptionScore : 0;
+            summaryDisruptionScoreBar.style.width = `${disruptionScore}%`;
+            summaryDisruptionScoreBar.textContent = disruptionScore.toFixed(0);
+            summaryDisruptionScoreBar.style.backgroundColor = getScoreBarColor(disruptionScore);
+
+            const wtRes = residueInfo.oneLetterCode;
+            const mutRes = newAA;
+            summaryAAPropsTableBody.querySelector('td[data-prop="res-wt"]').textContent = `${wtRes} (${AMINO_ACID_MAP_1_TO_3_REV[wtRes] || 'N/A'})`;
+            summaryAAPropsTableBody.querySelector('td[data-prop="res-mut"]').textContent = `${mutRes} (${AMINO_ACID_MAP_1_TO_3_REV[mutRes] || 'N/A'})`;
+            summaryAAPropsTableBody.querySelector('td[data-prop="size-wt"]').textContent = AA_SIZE_LABEL[AMINO_ACID_SIZE_CATEGORY[wtRes]] || "N/A";
+            summaryAAPropsTableBody.querySelector('td[data-prop="size-mut"]').textContent = AA_SIZE_LABEL[AMINO_ACID_SIZE_CATEGORY[mutRes]] || "N/A";
+            summaryAAPropsTableBody.querySelector('td[data-prop="charge-wt"]').textContent = AA_CHARGE[wtRes] || "N/A";
+            summaryAAPropsTableBody.querySelector('td[data-prop="charge-mut"]').textContent = AA_CHARGE[mutRes] || "N/A";
+            summaryAAPropsTableBody.querySelector('td[data-prop="hydro-wt"]').textContent = AA_HYDROPHOBICITY_SIMPLE[wtRes] || "N/A";
+            summaryAAPropsTableBody.querySelector('td[data-prop="hydro-mut"]').textContent = AA_HYDROPHOBICITY_SIMPLE[mutRes] || "N/A";
+            summaryAAPropsTableBody.querySelector('td[data-prop="hbond-wt"]').textContent = getHbondCapability(wtRes);
+            summaryAAPropsTableBody.querySelector('td[data-prop="hbond-mut"]').textContent = getHbondCapability(mutRes);
+
+            const insights = [];
+            const wtSizeCat = AMINO_ACID_SIZE_CATEGORY[wtRes];
+            const mutSizeCat = AMINO_ACID_SIZE_CATEGORY[mutRes];
+            if (mutSizeCat > wtSizeCat + 1) insights.push(`Significant size increase from ${AA_SIZE_LABEL[wtSizeCat]} to ${AA_SIZE_LABEL[mutSizeCat]}.`);
+            else if (wtSizeCat > mutSizeCat + 1) insights.push(`Significant size decrease from ${AA_SIZE_LABEL[wtSizeCat]} to ${AA_SIZE_LABEL[mutSizeCat]}.`);
+            else if (mutSizeCat !== wtSizeCat) insights.push(`Size change: ${AA_SIZE_LABEL[wtSizeCat]} to ${AA_SIZE_LABEL[mutSizeCat]}.`);
+            if ((AA_CHARGE[wtRes] || "").startsWith("Positive") && !(AA_CHARGE[mutRes] || "").startsWith("Positive")) insights.push("Loss of positive charge.");
+            if ((AA_CHARGE[wtRes] || "").startsWith("Negative") && !(AA_CHARGE[mutRes] || "").startsWith("Negative")) insights.push("Loss of negative charge.");
+            if (!(AA_CHARGE[wtRes] || "").startsWith("Positive") && (AA_CHARGE[mutRes] || "").startsWith("Positive")) insights.push("Gain of positive charge.");
+            if (!(AA_CHARGE[wtRes] || "").startsWith("Negative") && (AA_CHARGE[mutRes] || "").startsWith("Negative")) insights.push("Gain of negative charge.");
+            const wtHydro = AA_HYDROPHOBICITY_SIMPLE[wtRes];
+            const mutHydro = AA_HYDROPHOBICITY_SIMPLE[mutRes];
+            if (wtHydro !== mutHydro) insights.push(`Hydrophobicity change: ${wtHydro} to ${mutHydro}.`);
+            if (lostHBondsCount > 0) insights.push(`${lostHBondsCount} potential sidechain H-bond(s) lost.`);
+            if (proximityToBindingSite) {
+                if (proximityToBindingSite.status === "IN_SITE") insights.push("Mutation IS WITHIN a potential binding site region.");
+                else if (proximityToBindingSite.status === "NEAR_SITE") insights.push(`Mutation IS NEAR a binding site region (approx. ${proximityToBindingSite.distance.toFixed(1)}Å).`);
+            }
+            const isNewBulky = BULKY_AMINO_ACIDS.includes(newAA);
+            if (nearbyAtomCount > (isNewBulky ? 8 : 12)) insights.push("Introduced into a CROWDED local environment.");
+            else if (nearbyAtomCount > (isNewBulky ? 4 : 6)) insights.push("Introduced into a MODERATELY crowded environment.");
+            if (insights.length === 0) insights.push("No major distinguishing changes detected by current heuristics.");
+            summaryInsightsList.innerHTML = insights.map(insight => `<li>${insight}</li>`).join('');
+        }
+        applyMutationBtn.addEventListener('click', function() {
+            if (!tosAgreed) { alert("Please agree to the Terms of Use before using the analysis features."); showTosAgreementModal(); return; }
+            const inputText = mutationInput.value.trim().toUpperCase();
+            resetAllAnalysisPanels();
+
+            currentMutation.interactionShapes.forEach(shape => { if(viewerWT && shape && shape.id) viewerWT.removeShape(shape.id); });
+            currentMutation = { ...currentMutation,
+                residueInfo: null, newAA: null, labelObjectMutant: null, interactionShapes: [],
+                nearbyAtomCount: 0, lostHBondsCount: 0, proximityToBindingSite: null,
+                overallImpactScore: null, bindingDisruptionScore: null, riskLevel: null, riskColor: null
+            };
+            populateSummaryChart();
+
+
+            if (!viewerWT || !viewerMutant || !extractedSequences || Object.keys(extractedSequences).length === 0) { logStatus("ERROR: Load structure first."); mutationStatusSpan.textContent = "Load structure!"; return; }
+
+            applyAndRefreshStyles(viewerWT); applyAndRefreshStyles(viewerMutant);
+
+            if (!inputText) { logStatus("INFO: Mutation input cleared."); mutationStatusSpan.textContent = "No mutation applied."; return; }
+
+            const parts = inputText.split(':'); if (parts.length !== 3) { logStatus(`ERROR: Invalid mutation format: "${mutationInput.value}".`); mutationStatusSpan.textContent = "Invalid format!"; return; }
+            const chainKey = parts[0], sequenceIndex = parseInt(parts[1], 10), newAminoAcid = parts[2];
+            if (isNaN(sequenceIndex) || sequenceIndex < 1) { logStatus(`ERROR: Invalid sequence index "${parts[1]}".`); mutationStatusSpan.textContent = "Invalid index!"; return; }
+            if (newAminoAcid.length !== 1 || !isValidAminoAcid1Letter(newAminoAcid)) { logStatus(`ERROR: Invalid new amino acid "${newAminoAcid}".`); mutationStatusSpan.textContent = "Invalid New AA!"; return; }
+            if (!extractedSequences[chainKey]) { logStatus(`ERROR: Chain ID "${chainKey}" not found.`); mutationStatusSpan.textContent = `Chain ${chainKey} not found!`; return; }
+            const chainSequenceArray = extractedSequences[chainKey];
+            if (sequenceIndex > chainSequenceArray.length) { logStatus(`ERROR: Seq index ${sequenceIndex} out of bounds.`); mutationStatusSpan.textContent = `Index out of bounds!`; return; }
+            const residueInfo = chainSequenceArray[sequenceIndex - 1];
+            if (!residueInfo) { logStatus(`ERROR: No residue info for ${chainKey}:${sequenceIndex}.`); mutationStatusSpan.textContent = "Internal error!"; return; }
+
+            currentMutation.residueInfo = residueInfo;
+            currentMutation.newAA = newAminoAcid;
+
+            performStericAnalysis(residueInfo, newAminoAcid);
+            performInteractionAnalysis(residueInfo, newAminoAcid);
+            const proximityInfo = checkMutationProximityToBindingSites(residueInfo);
+            predictBindingDisruption(residueInfo, newAminoAcid, proximityInfo, currentMutation.nearbyAtomCount, currentMutation.lostHBondsCount);
+            calculateAndShowImpactScore(residueInfo, newAminoAcid, currentMutation.nearbyAtomCount, currentMutation.lostHBondsCount);
+            determineAndDisplayRiskLevel();
+            populateSummaryChart();
+
+            applyAndRefreshStyles(viewerMutant);
+
+            mutationStatusSpan.textContent = `Mutated: ${chainKey}:${sequenceIndex} (${residueInfo.oneLetterCode}) -> ${newAminoAcid}`;
+            logStatus(`Mutation applied: ${chainKey}:${sequenceIndex} (${residueInfo.oneLetterCode}) -> ${newAminoAcid}`);
+        });
+        toggleBindingSitesBtn.addEventListener('click', function() {
+            if (!tosAgreed) { alert("Please agree to the Terms of Use first."); showTosAgreementModal(); return; }
+            if (!viewerWT || !structureData) { logStatus("ERROR: Load structure first."); bindingSiteStatusSpan.textContent = "Load structure!"; return; }
+            bindingSitesHighlighted = !bindingSitesHighlighted;
+            if (bindingSitesHighlighted && bindingSiteResidueKeys.size === 0 && bindingSiteDisplaySelections.length === 0) { findAndStoreBindingSiteResidues(); }
+            applyAndRefreshStyles(viewerWT); applyAndRefreshStyles(viewerMutant);
+            bindingSiteStatusSpan.textContent = bindingSitesHighlighted ? "Sites SHOWN (blue)" : "Sites hidden.";
+            logStatus(`Binding sites display: ${bindingSitesHighlighted ? 'ON' : 'OFF'}`);
+            if (currentMutation.residueInfo) {
+                const proximityInfo = checkMutationProximityToBindingSites(currentMutation.residueInfo);
+                predictBindingDisruption(currentMutation.residueInfo, currentMutation.newAA, proximityInfo, currentMutation.nearbyAtomCount, currentMutation.lostHBondsCount);
+                determineAndDisplayRiskLevel();
+                populateSummaryChart();
+            } else {
+                resetAllAnalysisPanels();
+            }
+        });
+        accordionHeaders.forEach(header => { header.addEventListener('click', function() { const contentId = this.dataset.target; const contentElement = document.querySelector(contentId); const iconElement = this.querySelector('.toggle-icon'); if (contentElement) { const isVisible = contentElement.style.display === 'block'; contentElement.style.display = isVisible ? 'none' : 'block'; iconElement.textContent = isVisible ? '+' : '-'; } }); });
+        tabButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                tabButtons.forEach(btn => btn.classList.remove('active'));
+                tabContents.forEach(content => content.classList.remove('active'));
+                button.classList.add('active');
+                document.getElementById(button.dataset.tab).classList.add('active');
+            });
+        });
+        generatePdfBtn.addEventListener('click', function() {
+            if (!tosAgreed) { alert("Please agree to the Terms of Use first."); showTosAgreementModal(); return; }
+            if (!currentMutation.residueInfo || !currentMutation.newAA) {
+                logStatus("ERROR: No mutation applied. Cannot generate report.");
+                alert("Please apply a mutation first to generate a report.");
+                return;
+            }
+            logStatus("Generating PDF report...");
+            try {
+                const doc = new jsPDF();
+                const { residueInfo, newAA, overallImpactScore, bindingDisruptionScore, riskLevel, riskColor, loadedFileName } = currentMutation;
+                let yPosition = 15;
+                const pageHeight = doc.internal.pageSize.height;
+                const pageWidth = doc.internal.pageSize.width;
+                const margin = 15;
+                const usableWidth = pageWidth - (2 * margin);
+
+                function checkAndAddPage(neededHeight = 20) { if (yPosition + neededHeight > pageHeight - margin) { doc.addPage(); yPosition = margin; } }
+                function addSectionTitle(title) { checkAndAddPage(15); doc.setFontSize(14); doc.setFont(undefined, 'bold'); doc.text(title, margin, yPosition); yPosition += 8; doc.setFont(undefined, 'normal'); }
+                function addWrappedText(text, options = {}) {
+                    const fontSize = options.fontSize || 10;
+                    const lineHeightFactor = options.lineHeightFactor || 1.15;
+                    const indent = options.indent || 0;
+                    doc.setFontSize(fontSize);
+                    const lines = doc.splitTextToSize(text || "N/A", usableWidth - indent);
+                    checkAndAddPage(lines.length * fontSize * lineHeightFactor * 0.352778 + 5);
+                    lines.forEach(line => {
+                        doc.text(line, margin + indent, yPosition);
+                        yPosition += fontSize * lineHeightFactor * 0.352778;
+                        if (yPosition > pageHeight - margin - 5) { checkAndAddPage(fontSize * lineHeightFactor * 0.352778 + 5); }
+                    });
+                    yPosition += 3;
+                }
+
+                doc.setFontSize(18); doc.setFont(undefined, 'bold'); doc.text("STRATALYZE Mutation Analysis Report", pageWidth / 2, yPosition, { align: 'center' }); yPosition += 10; doc.setFont(undefined, 'normal');
+                doc.setFontSize(10); doc.text(`Report Generated: ${new Date().toLocaleString()}`, margin, yPosition); yPosition += 5;
+                doc.text(`Analyzed File: ${loadedFileName || 'N/A'}`, margin, yPosition); yPosition += 8;
+
+                addSectionTitle("Mutation Overview");
+                addWrappedText(`Mutation: ${residueInfo.originalChainID}:${residueInfo.originalResiNum} (${residueInfo.oneLetterCode} -> ${newAA})`);
+                addWrappedText(`Predicted Risk Level: ${riskLevel || "N/A"}`); yPosition += 5;
+
+                addSectionTitle("Summary Scores");
+                doc.autoTable({
+                    startY: yPosition, head: [['Metric', 'Score']],
+                    body: [ ['Overall Structural Impact', `${(overallImpactScore !== null ? overallImpactScore : 0).toFixed(0)} / 100`], ['Binding Disruption', `${(bindingDisruptionScore !== null ? bindingDisruptionScore : 0).toFixed(0)} / 100`] ],
+                    theme: 'grid', styles: { fontSize: 9, cellPadding: 1.5 }, headStyles: { fillColor: [0, 100, 0], textColor: 255 }, margin: { left: margin, right: margin }
+                });
+                yPosition = doc.lastAutoTable.finalY + 10;
+
+                addSectionTitle("Amino Acid Property Comparison");
+                const aaTableBody = [
+                    ["Residue", `${residueInfo.oneLetterCode} (${AMINO_ACID_MAP_1_TO_3_REV[residueInfo.oneLetterCode] || 'N/A'})`, `${newAA} (${AMINO_ACID_MAP_1_TO_3_REV[newAA] || 'N/A'})`],
+                    ["Size Category", AA_SIZE_LABEL[AMINO_ACID_SIZE_CATEGORY[residueInfo.oneLetterCode]] || "N/A", AA_SIZE_LABEL[AMINO_ACID_SIZE_CATEGORY[newAA]] || "N/A"],
+                    ["Charge", AA_CHARGE[residueInfo.oneLetterCode] || "N/A", AA_CHARGE[newAA] || "N/A"],
+                    ["Hydrophobicity", AA_HYDROPHOBICITY_SIMPLE[residueInfo.oneLetterCode] || "N/A", AA_HYDROPHOBICITY_SIMPLE[newAA] || "N/A"],
+                    ["H-Bond Potential", getHbondCapability(residueInfo.oneLetterCode), getHbondCapability(newAA)]
+                ];
+                doc.autoTable({
+                    startY: yPosition, head: [['Property', 'Wild-Type (WT)', 'Mutant (MUT)']], body: aaTableBody,
+                    theme: 'grid', styles: { fontSize: 9, cellPadding: 1.5 }, headStyles: { fillColor: [0, 100, 0], textColor: 255 }, margin: { left: margin, right: margin }
+                });
+                yPosition = doc.lastAutoTable.finalY + 10;
+
+                addSectionTitle("Key Insights Summary");
+                const insightsHTML = summaryInsightsList.innerHTML;
+                const tempDiv = document.createElement('div'); tempDiv.innerHTML = insightsHTML;
+                const insightsArray = Array.from(tempDiv.querySelectorAll('li')).map(li => li.textContent || "N/A");
+                insightsArray.forEach(insight => addWrappedText(`- ${insight}`, {indent: 5})); yPosition += 5;
+
+                const accordionDetails = [
+                    { title: "Steric Hindrance Analysis", element: stericOutputElement },
+                    { title: "Interaction Impact Analysis", element: interactionOutputElement },
+                    { title: "Binding Site Proximity Analysis", element: bindingSiteProximityOutputElement },
+                    { title: "Binding Disruption Prediction", element: bindingDisruptionOutputElement },
+                    { title: "Overall Impact Score Details", element: impactScoreOutputElement }
+                ];
+                accordionDetails.forEach(detail => { addSectionTitle(detail.title); addWrappedText(detail.element.textContent || "N/A", {fontSize: 8, lineHeightFactor: 1.0}); });
+
+                doc.save(`STRATALYZE_Mutation_Report_${residueInfo.originalChainID}_${residueInfo.originalResiNum}${residueInfo.oneLetterCode}to${newAA}.pdf`);
+                logStatus("PDF report generated and download initiated.");
+            } catch (error) { logStatus(`ERROR generating PDF: ${error.message}`); console.error("PDF Generation Error:", error); alert("An error occurred while generating the PDF report. See console for details."); }
+        });
+
+        // Instructions Modal Logic
+        instructionsBtn.addEventListener('click', () => {
+            instructionsModalOverlay.style.display = 'block';
+            logStatus("Instructions panel opened.");
+        });
+        instructionsModalCloseBtn.addEventListener('click', () => {
+            instructionsModalOverlay.style.display = 'none';
+            logStatus("Instructions panel closed.");
+        });
+        instructionsModalOverlay.addEventListener('click', (event) => {
+            if (event.target === instructionsModalOverlay) {
+                instructionsModalOverlay.style.display = 'none';
+                logStatus("Instructions panel closed by overlay click.");
+            }
+        });
+
+        // Terms of Use (Agreement Modal) Logic
+        function showTosAgreementModal() {
+            tosAgreementModalOverlay.style.display = 'block';
+            logStatus("Terms of Use verification required.");
+        }
+        tosAgreementModalTextContent.addEventListener('scroll', function() {
+            if (this.scrollHeight - this.scrollTop <= this.clientHeight + 10) { // +10 buffer
+                tosAgreeCheckbox.disabled = false;
+                if (!tosAgreeCheckbox.title) { tosAgreeCheckbox.title = "You can now agree to the terms.";}
+            }
+        });
+        tosAgreeCheckbox.addEventListener('change', function() {
+            tosAgreeBtn.disabled = !this.checked;
+        });
+        tosAgreeBtn.addEventListener('click', function() {
+            tosAgreementModalOverlay.style.display = 'none';
+            tosAgreed = true;
+            localStorage.setItem('STRATALYZETosAgreed_v1.23', 'true');
+            logStatus("Terms of Use agreed. System ready.");
+            statusLog.innerHTML = statusLog.innerHTML.replace("Awaiting Terms of Use agreement.", "System Online. Ready.");
+            if (currentMutation.residueInfo && currentMutation.newAA) { // Enable PDF if mutation already loaded
+                generatePdfBtn.disabled = false;
+            }
+        });
+
+        // View Terms of Service (Informational Modal) Logic
+        viewTosBtn.addEventListener('click', () => {
+            viewTosModalOverlay.style.display = 'block';
+            logStatus("View Terms of Service panel opened.");
+        });
+        viewTosModalCloseBtn.addEventListener('click', () => {
+            viewTosModalOverlay.style.display = 'none';
+            logStatus("View Terms of Service panel closed.");
+        });
+        viewTosModalOverlay.addEventListener('click', (event) => {
+            if (event.target === viewTosModalOverlay) {
+                viewTosModalOverlay.style.display = 'none';
+                logStatus("View Terms of Service panel closed by overlay click.");
+            }
+        });
+
+
+        // Initial Setup
+        $(document).ready(function() {
+            initViewers();
+            $(window).on('resize', function() { if (viewerWT) viewerWT.resize(); if (viewerMutant) viewerMutant.resize(); });
+            populateSummaryChart();
+            resetAllAnalysisPanels(); // This will disable PDF button initially
+
+            if (localStorage.getItem('STRATALYZETosAgreed_v1.23') === 'true') {
+                tosAgreed = true;
+                logStatus("Terms of Use previously agreed. System ready.");
+                statusLog.innerHTML = statusLog.innerHTML.replace("Awaiting Terms of Use agreement.", "System Online. Ready.");
+                // If ToS is agreed and a mutation happens to be loaded (e.g. from a future state save), ensure PDF button is enabled.
+                // This condition is mostly for future enhancements, as currently mutation isn't saved.
+                if (currentMutation.residueInfo && currentMutation.newAA) {
+                     generatePdfBtn.disabled = false;
+                }
+            } else {
+                setTimeout(showTosAgreementModal, 3000);
+            }
+        });
+    </script>
+</body>
+</html>
